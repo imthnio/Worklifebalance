@@ -16,13 +16,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build pkg
         run: ./scripts/build.sh
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Worklifebalance-pkg
-          path: build/*.pkg
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: build/*.pkg
+      # Only the latest version stays downloadable
+      - name: Remove older releases
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 100 --json tagName --jq '.[].tagName' |
+          while read -r tag; do
+            if [ "$tag" != "$GITHUB_REF_NAME" ]; then
+              gh release delete "$tag" --yes --cleanup-tag
+            fi
+          done

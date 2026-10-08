@@ -7,7 +7,6 @@ class TBPlayer: ObservableObject {
     private var defaultDingSound: AVAudioPlayer
     private var customDingSound: AVAudioPlayer?
     private var dingSound: AVAudioPlayer { customDingSound ?? defaultDingSound }
-    private var tickingSound: AVAudioPlayer
 
     @AppStorage("windupVolume") var windupVolume: Double = 1.0 {
         didSet {
@@ -17,14 +16,13 @@ class TBPlayer: ObservableObject {
     @AppStorage("dingVolume") var dingVolume: Double = 1.0 {
         didSet {
             setVolume(defaultDingSound, dingVolume)
-            if let custom = customDingSound {
-                setVolume(custom, dingVolume)
-            }
         }
     }
-    @AppStorage("tickingVolume") var tickingVolume: Double = 1.0 {
+    @AppStorage("customAlertVolume") var customAlertVolume: Double = 1.0 {
         didSet {
-            setVolume(tickingSound, tickingVolume)
+            if let custom = customDingSound {
+                setVolume(custom, customAlertVolume)
+            }
         }
     }
     /// Path of a user-chosen audio file played when time is up; empty means the built-in sound
@@ -33,18 +31,6 @@ class TBPlayer: ObservableObject {
             loadCustomDing()
         }
     }
-    @AppStorage("tickingEnabled") var tickingEnabled = true {
-        didSet {
-            if !tickingEnabled {
-                tickingSound.stop()
-            } else if tickingWanted {
-                tickingSound.play()
-            }
-        }
-    }
-
-    /// Whether the timer is running and wants the ticking sound
-    private var tickingWanted = false
 
     private func setVolume(_ sound: AVAudioPlayer, _ volume: Double) {
         sound.setVolume(Float(volume), fadeDuration: 0)
@@ -64,16 +50,12 @@ class TBPlayer: ObservableObject {
     init() {
         windupSound = Self.load("windup")
         defaultDingSound = Self.load("ding")
-        tickingSound = Self.load("ticking")
 
         windupSound.prepareToPlay()
         defaultDingSound.prepareToPlay()
-        tickingSound.numberOfLoops = -1
-        tickingSound.prepareToPlay()
 
         setVolume(windupSound, windupVolume)
         setVolume(defaultDingSound, dingVolume)
-        setVolume(tickingSound, tickingVolume)
         loadCustomDing()
     }
 
@@ -92,7 +74,7 @@ class TBPlayer: ObservableObject {
             return
         }
         sound.prepareToPlay()
-        setVolume(sound, dingVolume)
+        setVolume(sound, customAlertVolume)
         customDingSound = sound
     }
 
@@ -118,21 +100,5 @@ class TBPlayer: ObservableObject {
         }
         dingSound.currentTime = 0
         dingSound.play()
-    }
-
-    func startTicking() {
-        tickingWanted = true
-        if tickingEnabled {
-            tickingSound.play()
-        }
-    }
-
-    func stopTicking() {
-        tickingWanted = false
-        tickingSound.stop()
-    }
-
-    func toggleTicking() {
-        tickingEnabled.toggle()
     }
 }

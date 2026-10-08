@@ -2,7 +2,7 @@ import Carbon
 import SwiftUI
 
 enum HotKeyAction: String, CaseIterable, Codable, Identifiable {
-    case startStop, pauseResume, reset, togglePopover, toggleTicking, quit
+    case startStop, pauseResume, reset, togglePopover, quit
 
     var id: String { rawValue }
 
@@ -15,7 +15,6 @@ enum HotKeyAction: String, CaseIterable, Codable, Identifiable {
         case .pauseResume: return HotKey(keyCode: UInt32(kVK_ANSI_P), modifiers: mods)
         case .reset: return HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: mods)
         case .togglePopover: return HotKey(keyCode: UInt32(kVK_ANSI_T), modifiers: mods)
-        case .toggleTicking: return HotKey(keyCode: UInt32(kVK_ANSI_M), modifiers: mods)
         case .quit: return HotKey.commandQ
         }
     }
@@ -104,8 +103,25 @@ private let storageKey = "hotKeys"
 private let knownActionsKey = "hotKeysKnownActions"
 /// Actions that existed in 1.0, before known actions were tracked
 private let initialActions: [HotKeyAction] = [
-    .startStop, .pauseResume, .reset, .togglePopover, .toggleTicking,
+    .startStop, .pauseResume, .reset, .togglePopover,
 ]
+
+/// Reads saved shortcuts one by one, skipping actions removed in newer versions
+private func decodeSavedHotKeys(_ data: Data) -> [HotKeyAction: HotKey]? {
+    // Stored as a flat [action, hotKey, action, hotKey, ...] array
+    guard let items = try? JSONSerialization.jsonObject(with: data) as? [Any],
+          items.count % 2 == 0 else { return nil }
+    var keys: [HotKeyAction: HotKey] = [:]
+    for index in stride(from: 0, to: items.count, by: 2) {
+        guard let name = items[index] as? String,
+              let action = HotKeyAction(rawValue: name),
+              let value = items[index + 1] as? [String: Any],
+              let keyCode = value["keyCode"] as? UInt32,
+              let modifiers = value["modifiers"] as? UInt32 else { continue }
+        keys[action] = HotKey(keyCode: keyCode, modifiers: modifiers)
+    }
+    return keys
+}
 
 class HotKeyCenter: ObservableObject {
     static let shared = HotKeyCenter()
@@ -118,7 +134,7 @@ class HotKeyCenter: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         if let data = defaults.data(forKey: storageKey),
-           let saved = try? JSONDecoder().decode([HotKeyAction: HotKey].self, from: data) {
+           let saved = decodeSavedHotKeys(data) {
             /*
              Keep the user's shortcuts across updates. Actions added in newer
              versions get their default shortcut, unless it is already taken.

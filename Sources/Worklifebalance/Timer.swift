@@ -32,7 +32,6 @@ class TBTimer: ObservableObject {
         hotKeys.onPress(.pauseResume) { [unowned self] in pauseResume() }
         hotKeys.onPress(.reset) { [unowned self] in reset() }
         hotKeys.onPress(.togglePopover) { TBStatusItem.shared.togglePopover(nil) }
-        hotKeys.onPress(.toggleTicking) { [unowned self] in player.toggleTicking() }
         hotKeys.onPress(.quit) { NSApp.terminate(nil) }
 
         let aem: NSAppleEventManager = NSAppleEventManager.shared()
@@ -81,7 +80,6 @@ class TBTimer: ObservableObject {
         case .work:
             pausedTimeLeft = max(finishTime.timeIntervalSince(Date()), 0)
             cancelTimer()
-            player.stopTicking()
             state = .paused
             TBStatusItem.shared.setIcon(name: .idle)
             updateTimeLeft()
@@ -128,13 +126,11 @@ class TBTimer: ObservableObject {
         if playWindup {
             player.playWindup()
         }
-        player.startTicking()
         startTimer(seconds: seconds)
     }
 
     private func stop() {
         cancelTimer()
-        player.stopTicking()
         state = .idle
         TBStatusItem.shared.setIcon(name: .idle)
         updateTimeLeft()
@@ -142,7 +138,6 @@ class TBTimer: ObservableObject {
 
     private func finish() {
         cancelTimer()
-        player.stopTicking()
         player.playDing()
         let l10n = L10n.shared
         if autoRestart {

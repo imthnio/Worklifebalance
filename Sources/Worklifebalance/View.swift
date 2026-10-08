@@ -128,13 +128,7 @@ private struct SoundsView: View {
                 VolumeSlider(volume: $player.windupVolume)
                 Text(l10n.t("sounds.ding"))
                 VolumeSlider(volume: $player.dingVolume)
-                Text(l10n.t("sounds.ticking"))
-                VolumeSlider(volume: $player.tickingVolume)
             }
-            Toggle(isOn: $player.tickingEnabled) {
-                Text(l10n.t("shortcut.toggleTicking"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.toggleStyle(.switch)
             Divider()
             alertSound
         }
@@ -169,6 +163,14 @@ private struct SoundsView: View {
                     }
                     .buttonStyle(.plain)
                     .help(l10n.t("sounds.useDefault"))
+                }
+            }
+            if !player.customAlertSoundPath.isEmpty {
+                HStack {
+                    Text(l10n.t("sounds.customVolume"))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VolumeSlider(volume: $player.customAlertVolume)
+                        .frame(width: 110)
                 }
             }
             if player.customAlertSoundUnavailable {
