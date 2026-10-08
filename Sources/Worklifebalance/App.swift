@@ -32,8 +32,7 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         )
         statusBarItem?.button?.imagePosition = .imageLeft
         setIcon(name: .idle)
-        statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
-        // Open the panel with either mouse button
+        statusBarItem?.button?.action = #selector(TBStatusItem.statusItemClicked(_:))
         statusBarItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusBarItem?.button?.target = self
 
@@ -87,6 +86,36 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
 
     func closePopover(_ sender: AnyObject?) {
         popover.performClose(sender)
+    }
+
+    enum ClickAction {
+        case togglePanel, start, none
+    }
+
+    /// Right click (or Control-click) opens the panel, a left double click starts the timer
+    static func clickAction(for event: NSEvent) -> ClickAction {
+        let isRightClick = event.type == .rightMouseUp ||
+            (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+        if isRightClick {
+            return .togglePanel
+        }
+        if event.type == .leftMouseUp, event.clickCount == 2 {
+            return .start
+        }
+        return .none
+    }
+
+    @objc func statusItemClicked(_ sender: AnyObject?) {
+        guard let event = NSApp.currentEvent else { return }
+        switch Self.clickAction(for: event) {
+        case .togglePanel:
+            togglePopover(sender)
+        case .start:
+            closePopover(sender)
+            timer.startFromStatusItem()
+        case .none:
+            break
+        }
     }
 
     @objc func togglePopover(_ sender: AnyObject?) {

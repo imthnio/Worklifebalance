@@ -73,6 +73,18 @@ class TBTimer: ObservableObject {
         }
     }
 
+    /// Starts a new round, or resumes a paused one; a running round is left alone
+    func startFromStatusItem() {
+        switch state {
+        case .idle:
+            startStop()
+        case .paused:
+            pauseResume()
+        case .work:
+            return
+        }
+    }
+
     func pauseResume() {
         switch state {
         case .idle:
