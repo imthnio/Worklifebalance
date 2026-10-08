@@ -73,15 +73,6 @@ class TBTimer: ObservableObject {
         }
     }
 
-    /// Starts a new round, or restarts the current one (running or paused) from the beginning
-    func startFromStatusItem() {
-        if state == .idle {
-            startStop()
-        } else {
-            reset()
-        }
-    }
-
     func pauseResume() {
         switch state {
         case .idle:

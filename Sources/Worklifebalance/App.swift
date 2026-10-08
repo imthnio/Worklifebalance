@@ -89,14 +89,14 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
     }
 
     enum ClickAction {
-        case togglePanel, start, none
+        case togglePanel, startStop, none
     }
 
     /// Time of the previous left click on the menu bar icon
     private var lastLeftClick: TimeInterval?
 
     /*
-     Right click (or Control-click) opens the panel, a left double click starts the timer.
+     Right click (or Control-click) opens the panel, a left double click starts or stops the timer.
      On recent macOS the menu bar relays every click as a separate single click
      (clickCount is always 1), so double clicks are detected by timing.
      */
@@ -108,11 +108,11 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         }
         if clickCount >= 2 {
             lastLeftClick = nil
-            return .start
+            return .startStop
         }
         if let last = lastLeftClick, now - last <= NSEvent.doubleClickInterval {
             lastLeftClick = nil
-            return .start
+            return .startStop
         }
         lastLeftClick = now
         return .none
@@ -125,9 +125,9 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         switch clickAction(isRightClick: isRightClick, clickCount: event.clickCount) {
         case .togglePanel:
             togglePopover(sender)
-        case .start:
+        case .startStop:
             closePopover(sender)
-            timer.startFromStatusItem()
+            timer.startStop()
         case .none:
             break
         }
