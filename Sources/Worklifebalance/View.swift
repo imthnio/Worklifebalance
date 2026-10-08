@@ -1,8 +1,158 @@
 import SwiftUI
 
-private struct TimerSettingsView: View {
+// MARK: - Styling
+
+let tomato = Color(red: 0.96, green: 0.33, blue: 0.27)
+private let startGreen = Color(red: 0.20, green: 0.78, blue: 0.35)
+private let pauseOrange = Color(red: 1.0, green: 0.62, blue: 0.04)
+
+private struct CircleButtonStyle: ButtonStyle {
+    let tint: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(tint ?? .primary)
+            .circleBackground(tint: tint)
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+private extension View {
+    /// Liquid Glass on macOS 26+, a matching translucent fill before that.
+    /// Tinted buttons follow the Clock app: colored label on a soft tinted circle.
+    @ViewBuilder
+    func circleBackground(tint: Color?) -> some View {
+        if #available(macOS 26, *) {
+            self.glassEffect(tint.map { .regular.tint($0.opacity(0.3)).interactive() }
+                             ?? .regular.interactive(),
+                             in: Circle())
+        } else {
+            self.background(Circle().fill((tint ?? .primary).opacity(tint == nil ? 0.08 : 0.2)))
+        }
+    }
+
+    @ViewBuilder
+    func countdownTransition() -> some View {
+        if #available(macOS 14, *) {
+            self.contentTransition(.numericText(countsDown: true))
+        } else {
+            self
+        }
+    }
+}
+
+private class HoverState: ObservableObject {
+    @Published var hovered = false
+}
+
+/// A menu-like row that highlights on hover, as in the system's menu bar extras
+private struct MenuRow: View {
+    let title: String
+    var shortcut: String = ""
+    let action: () -> Void
+    @StateObject private var hover = HoverState()
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(shortcut).foregroundColor(.secondary)
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(hover.hovered ? Color.primary.opacity(0.1) : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.hovered = $0 }
+    }
+}
+
+// MARK: - Settings building blocks
+
+/// A titled, rounded group of rows in the style of System Settings
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    var footer: String?
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+                .padding(.leading, 4)
+            VStack(spacing: 0) {
+                content
+            }
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+            if let footer = footer {
+                Text(footer)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 4)
+            }
+        }
+    }
+}
+
+private struct SettingsRow<Trailing: View>: View {
+    let title: String
+    var divider = true
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                trailing
+            }
+            .frame(minHeight: 22)
+            .padding(.vertical, 6)
+            if divider {
+                Divider()
+            }
+        }
+    }
+}
+
+private struct VolumeSlider: View {
+    @Binding var volume: Double
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "speaker.fill").foregroundColor(.secondary)
+            Slider(value: $volume, in: 0...2)
+                .gesture(TapGesture(count: 2).onEnded({
+                    volume = 1.0
+                }))
+            Image(systemName: "speaker.wave.3.fill").foregroundColor(.secondary)
+        }
+        .font(.system(size: 9))
+    }
+}
+
+// MARK: - Settings page
+
+private struct SettingsPage: View {
     @ObservedObject var timer: TBTimer
+    @ObservedObject var player: TBPlayer
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var launchAtLogin = LaunchAtLogin.shared
 
     private let workLengthRange = 1 ... 120
 
@@ -16,36 +166,93 @@ private struct TimerSettingsView: View {
     }
 
     var body: some View {
-        VStack {
-            HStack {
-                Text(l10n.t("timer.workLength"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 16) {
+            timerSection
+            alertSection
+            shortcutsSection
+            generalSection
+        }
+        .font(.system(size: 13))
+        .controlSize(.small)
+    }
+
+    private var timerSection: some View {
+        SettingsSection(title: l10n.t("tab.timer")) {
+            SettingsRow(title: l10n.t("timer.workLength")) {
                 TextField("", value: workLength, format: .number)
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
-                    .frame(width: 48)
-                Text(l10n.t("timer.minUnit"))
+                    .frame(width: 44)
+                Text(l10n.t("timer.minUnit")).foregroundColor(.secondary)
                 Stepper("", value: $timer.workIntervalLength, in: workLengthRange)
                     .labelsHidden()
             }
-            Toggle(isOn: $timer.autoRestart) {
-                Text(l10n.t("timer.autoRestart"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.toggleStyle(.switch)
+            SettingsRow(title: l10n.t("timer.autoRestart"), divider: false) {
+                Toggle("", isOn: $timer.autoRestart)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
         }
     }
-}
 
-private struct SettingsView: View {
-    @ObservedObject var timer: TBTimer
-    @ObservedObject private var l10n = L10n.shared
-    @ObservedObject private var launchAtLogin = LaunchAtLogin.shared
+    private var alertSection: some View {
+        let hasFile = !player.customAlertSoundPath.isEmpty
+        return SettingsSection(title: l10n.t("sounds.alertFile"),
+                               footer: player.customAlertSoundUnavailable
+                                   ? l10n.t("sounds.missing") : nil) {
+            SettingsRow(title: hasFile
+                            ? URL(fileURLWithPath: player.customAlertSoundPath).lastPathComponent
+                            : l10n.t("sounds.none"),
+                        divider: hasFile) {
+                if hasFile {
+                    Button {
+                        player.playAlert()
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .help(l10n.t("sounds.preview"))
+                    Button {
+                        player.customAlertSoundPath = ""
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help(l10n.t("sounds.remove"))
+                }
+                Button(l10n.t("sounds.choose")) {
+                    player.chooseCustomAlertSound()
+                }
+            }
+            .foregroundColor(player.customAlertSoundUnavailable ? .red : .primary)
+            .help(player.customAlertSoundPath)
+            if hasFile {
+                SettingsRow(title: l10n.t("sounds.volume"), divider: false) {
+                    VolumeSlider(volume: $player.customAlertVolume)
+                        .frame(width: 130)
+                }
+            }
+        }
+    }
 
-    var body: some View {
-        VStack {
+    private var shortcutsSection: some View {
+        SettingsSection(title: l10n.t("tab.shortcuts"), footer: l10n.t("shortcut.hint")) {
+            ForEach(HotKeyAction.allCases) { action in
+                SettingsRow(title: l10n.t(action.titleKey)) {
+                    HotKeyRecorder(action: action)
+                }
+            }
             HStack {
-                Text(l10n.t("settings.language"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer()
+                Button(l10n.t("shortcut.restoreDefaults")) {
+                    HotKeyCenter.shared.restoreDefaults()
+                }
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    private var generalSection: some View {
+        SettingsSection(title: l10n.t("settings.general")) {
+            SettingsRow(title: l10n.t("settings.language")) {
                 Picker("", selection: $l10n.language) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.nativeName).tag(lang)
@@ -54,191 +261,24 @@ private struct SettingsView: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            Toggle(isOn: $timer.showTimerInMenuBar) {
-                Text(l10n.t("settings.showTimer"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.toggleStyle(.switch)
-                .onChange(of: timer.showTimerInMenuBar) { _ in
-                    timer.updateTimeLeft()
-                }
-            Toggle(isOn: $launchAtLogin.isEnabled) {
-                Text(l10n.t("settings.launchAtLogin"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.toggleStyle(.switch)
-        }
-    }
-}
-
-private struct ShortcutsView: View {
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(HotKeyAction.allCases) { action in
-                HStack {
-                    Text(l10n.t(action.titleKey))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    HotKeyRecorder(action: action)
-                }
-            }
-            HStack {
-                Text(l10n.t("shortcut.hint"))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                Button(l10n.t("shortcut.restoreDefaults")) {
-                    HotKeyCenter.shared.restoreDefaults()
-                }
-                .controlSize(.small)
-            }
-        }
-    }
-}
-
-private struct VolumeSlider: View {
-    @Binding var volume: Double
-
-    var body: some View {
-        Slider(value: $volume, in: 0...2) {
-            Text(String(format: "%.1f", volume))
-        }.gesture(TapGesture(count: 2).onEnded({
-            volume = 1.0
-        }))
-    }
-}
-
-private struct SoundsView: View {
-    @ObservedObject var player: TBPlayer
-    @ObservedObject private var l10n = L10n.shared
-
-    init(player: TBPlayer) {
-        self.player = player
-    }
-
-    var body: some View {
-        alertSound
-    }
-
-    private var alertSound: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(l10n.t("sounds.alertFile"))
-            HStack(spacing: 6) {
-                Text(player.customAlertSoundPath.isEmpty
-                     ? l10n.t("sounds.none")
-                     : URL(fileURLWithPath: player.customAlertSoundPath).lastPathComponent)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundColor(player.customAlertSoundUnavailable ? .red : .secondary)
-                    .help(player.customAlertSoundPath)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !player.customAlertSoundPath.isEmpty {
-                    Button {
-                        player.playAlert()
-                    } label: {
-                        Image(systemName: "play.fill")
+            SettingsRow(title: l10n.t("settings.showTimer")) {
+                Toggle("", isOn: $timer.showTimerInMenuBar)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: timer.showTimerInMenuBar) { _ in
+                        timer.updateTimeLeft()
                     }
-                    .help(l10n.t("sounds.preview"))
-                }
-                Button(l10n.t("sounds.choose")) {
-                    player.chooseCustomAlertSound()
-                }
-                if !player.customAlertSoundPath.isEmpty {
-                    Button {
-                        player.customAlertSoundPath = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(l10n.t("sounds.remove"))
-                }
             }
-            if !player.customAlertSoundPath.isEmpty {
-                HStack {
-                    Text(l10n.t("sounds.volume"))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    VolumeSlider(volume: $player.customAlertVolume)
-                        .frame(width: 110)
-                }
-            }
-            if player.customAlertSoundUnavailable {
-                Text(l10n.t("sounds.missing"))
-                    .font(.caption)
-                    .foregroundColor(.red)
+            SettingsRow(title: l10n.t("settings.launchAtLogin"), divider: false) {
+                Toggle("", isOn: $launchAtLogin.isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
             }
         }
     }
 }
 
-// MARK: - Styling
-
-let tomato = Color(red: 0.96, green: 0.33, blue: 0.27)
-
-private struct ControlButtonStyle<S: Shape>: ButtonStyle {
-    let prominent: Bool
-    let shape: S
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(prominent ? .white : .primary)
-            .controlBackground(prominent: prominent, shape: shape)
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
-    }
-}
-
-private extension View {
-    /// Liquid Glass on macOS 26+, a matching flat fill before that
-    @ViewBuilder
-    func controlBackground<S: Shape>(prominent: Bool, shape: S) -> some View {
-        if #available(macOS 26, *) {
-            self.glassEffect(prominent ? .regular.tint(tomato).interactive() : .regular.interactive(),
-                             in: shape)
-        } else {
-            self.background(shape.fill(prominent ? tomato : Color.primary.opacity(0.08)))
-        }
-    }
-
-    func controlStyle<S: Shape>(prominent: Bool, shape: S) -> some View {
-        buttonStyle(ControlButtonStyle(prominent: prominent, shape: shape))
-    }
-
-    @ViewBuilder
-    func countdownTransition() -> some View {
-        if #available(macOS 14, *) {
-            self.contentTransition(.numericText(countsDown: true))
-        } else {
-            self
-        }
-    }
-
-    func card() -> some View {
-        padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
-            )
-    }
-}
-
-private struct CircleControl: View {
-    let systemImage: String
-    var size: CGFloat = 36
-    var prominent = false
-    let help: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: size * 0.38, weight: .semibold))
-                .frame(width: size, height: size)
-                .contentShape(Circle())
-        }
-        .controlStyle(prominent: prominent, shape: Circle())
-        .help(help)
-    }
-}
+// MARK: - Timer page
 
 private struct ProgressRing: View {
     let progress: Double
@@ -247,57 +287,41 @@ private struct ProgressRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 9)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 7)
             Circle()
                 .trim(from: 0, to: progress)
-                .stroke(
-                    AngularGradient(colors: [tomato.opacity(0.55), tomato],
-                                    center: .center,
-                                    startAngle: .degrees(0),
-                                    endAngle: .degrees(max(360 * progress, 1))),
-                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
-                )
+                .stroke(pauseOrange, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .opacity(active ? 1 : 0.35)
+                .opacity(active ? 1 : 0.4)
         }
         .animation(.linear(duration: 1), value: progress)
         .animation(.easeInOut(duration: 0.3), value: active)
     }
 }
 
-// MARK: - Popover
+private struct CircleButton: View {
+    let title: String
+    var tint: Color?
+    var size: CGFloat = 64
+    let action: () -> Void
 
-private enum ChildView: CaseIterable {
-    case timer, settings, shortcuts, sounds
-
-    var icon: String {
-        switch self {
-        case .timer: return "timer"
-        case .settings: return "gearshape"
-        case .shortcuts: return "command"
-        case .sounds: return "speaker.wave.2"
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 4)
+                .frame(width: size, height: size)
+                .contentShape(Circle())
         }
-    }
-
-    var titleKey: String {
-        switch self {
-        case .timer: return "tab.timer"
-        case .settings: return "tab.settings"
-        case .shortcuts: return "tab.shortcuts"
-        case .sounds: return "tab.sounds"
-        }
+        .buttonStyle(CircleButtonStyle(tint: tint))
     }
 }
 
-private class PopoverUIState: ObservableObject {
-    @Published var activeChildView = ChildView.timer
-}
-
-struct TBPopoverView: View {
+private struct TimerPage: View {
     @ObservedObject var timer: TBTimer
     @ObservedObject private var l10n = L10n.shared
-    @StateObject private var ui = PopoverUIState()
-    @ObservedObject private var hotKeys = HotKeyCenter.shared
 
     private var displayTime: String {
         timer.state == .idle
@@ -305,32 +329,20 @@ struct TBPopoverView: View {
             : timer.timeLeftString
     }
 
-    private var statusText: String {
-        switch timer.state {
-        case .idle: return l10n.t("status.ready")
-        case .work: return l10n.t("status.focusing")
-        case .paused: return l10n.t("paused")
-        }
-    }
-
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             clock
             controls
-            tabs
-            footer
         }
-        .frame(width: 280)
-        .padding(16)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: timer.state)
     }
 
     private var clock: some View {
         ZStack {
             ProgressRing(progress: timer.progress, active: timer.state == .work)
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 Text(displayTime)
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    .font(.system(size: 44, weight: .light))
                     .monospacedDigit()
                     .countdownTransition()
                     .animation(.spring(response: 0.3, dampingFraction: 0.9), value: displayTime)
@@ -339,96 +351,162 @@ struct TBPopoverView: View {
                                ? .easeInOut(duration: 0.9).repeatForever()
                                : .default,
                                value: timer.state == .paused)
-                Text(statusText)
+                subtitle
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
-                    .transition(.opacity)
-                    .id(statusText)
             }
         }
-        .frame(width: 168, height: 168)
-        .padding(.top, 4)
+        .frame(width: 196, height: 196)
     }
 
     @ViewBuilder
-    private var controls: some View {
-        if timer.state == .idle {
-            Button {
-                timer.startStop()
-            } label: {
-                Label(l10n.t("start"), systemImage: "play.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 150, height: 36)
-                    .contentShape(Capsule())
+    private var subtitle: some View {
+        switch timer.state {
+        case .idle:
+            Text(l10n.t("status.ready"))
+        case .work:
+            if let end = timer.endTime {
+                Label {
+                    Text(end, style: .time)
+                } icon: {
+                    Image(systemName: "bell.fill")
+                }
             }
-            .controlStyle(prominent: true, shape: Capsule())
-            .keyboardShortcut(.defaultAction)
-            .transition(.scale(scale: 0.8).combined(with: .opacity))
-        } else {
-            HStack(spacing: 18) {
-                CircleControl(systemImage: "arrow.counterclockwise",
-                              help: l10n.t("reset")) { timer.reset() }
-                CircleControl(systemImage: timer.state == .paused ? "play.fill" : "pause.fill",
-                              size: 48, prominent: true,
-                              help: timer.state == .paused ? l10n.t("resume") : l10n.t("pause")) {
+        case .paused:
+            Text(l10n.t("paused"))
+        }
+    }
+
+    private var primaryTitle: String {
+        switch timer.state {
+        case .idle: return l10n.t("start")
+        case .work: return l10n.t("pause")
+        case .paused: return l10n.t("resume")
+        }
+    }
+
+    private var controls: some View {
+        HStack {
+            CircleButton(title: l10n.t("stop")) {
+                timer.startStop()
+            }
+            .disabled(timer.state == .idle)
+            .opacity(timer.state == .idle ? 0.4 : 1)
+            Spacer()
+            if timer.state != .idle {
+                Button {
+                    timer.reset()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(CircleButtonStyle(tint: nil))
+                .help(l10n.t("reset"))
+                .transition(.scale.combined(with: .opacity))
+                Spacer()
+            }
+            CircleButton(title: primaryTitle,
+                         tint: timer.state == .work ? pauseOrange : startGreen) {
+                if timer.state == .idle {
+                    timer.startStop()
+                } else {
                     timer.pauseResume()
                 }
-                .keyboardShortcut(.defaultAction)
-                CircleControl(systemImage: "stop.fill",
-                              help: l10n.t("stop")) { timer.startStop() }
             }
-            .transition(.scale(scale: 0.8).combined(with: .opacity))
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal, 6)
+    }
+}
+
+// MARK: - Popover
+
+private enum Page {
+    case timer, settings
+}
+
+private class PopoverUIState: ObservableObject {
+    @Published var page = Page.timer
+}
+
+struct TBPopoverView: View {
+    @ObservedObject var timer: TBTimer
+    @ObservedObject private var l10n = L10n.shared
+    @StateObject private var ui = PopoverUIState()
+    @ObservedObject private var hotKeys = HotKeyCenter.shared
+
+    var body: some View {
+        ZStack {
+            switch ui.page {
+            case .timer:
+                timerPage
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            case .settings:
+                settingsPage
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .frame(width: 290)
+        .clipped()
+    }
+
+    private func go(to page: Page) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+            ui.page = page
         }
     }
 
-    private var tabs: some View {
+    private var timerPage: some View {
         VStack(spacing: 10) {
-            Picker("", selection: $ui.activeChildView.animation(.spring(response: 0.3,
-                                                                       dampingFraction: 0.85))) {
-                ForEach(ChildView.allCases, id: \.self) { child in
-                    Image(systemName: child.icon)
-                        .help(l10n.t(child.titleKey))
-                        .tag(child)
+            TimerPage(timer: timer)
+                .padding(.top, 18)
+                .padding(.horizontal, 16)
+            Divider()
+                .padding(.horizontal, 14)
+            VStack(spacing: 0) {
+                MenuRow(title: l10n.t("tab.settings") + "…", shortcut: "⌘,") {
+                    go(to: .settings)
+                }
+                .keyboardShortcut(",")
+                MenuRow(title: l10n.t("quit"),
+                        shortcut: hotKeys.hotKeys[.quit]?.displayString ?? "") {
+                    NSApplication.shared.terminate(nil)
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-
-            Group {
-                switch ui.activeChildView {
-                case .timer:
-                    TimerSettingsView(timer: timer)
-                case .settings:
-                    SettingsView(timer: timer)
-                case .shortcuts:
-                    ShortcutsView()
-                case .sounds:
-                    SoundsView(player: timer.player)
-                }
-            }
-            .font(.system(size: 12))
-            .controlSize(.small)
-            .card()
-            .id(ui.activeChildView)
-            .transition(.opacity.combined(with: .offset(y: 6)))
+            .padding(.horizontal, 6)
+            .padding(.bottom, 6)
         }
     }
 
-    private var footer: some View {
-        HStack {
-            Spacer()
-            Button {
-                NSApplication.shared.terminate(self)
-            } label: {
-                HStack(spacing: 4) {
-                    Text(l10n.t("quit"))
-                    Text(hotKeys.hotKeys[.quit]?.displayString ?? "")
-                        .foregroundColor(.secondary.opacity(0.7))
+    private var settingsPage: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Text(l10n.t("tab.settings"))
+                    .font(.system(size: 13, weight: .semibold))
+                HStack {
+                    Button {
+                        go(to: .timer)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    Spacer()
                 }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            Divider()
+            ScrollView {
+                SettingsPage(timer: timer, player: timer.player)
+                    .padding(14)
+            }
+            .frame(height: 440)
         }
-        .buttonStyle(.plain)
-        .font(.system(size: 12))
-        .foregroundColor(.secondary)
     }
 }

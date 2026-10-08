@@ -77,7 +77,7 @@ private struct BannerView: View {
                 if let startNext = model.startNext {
                     Button(l10n.t("notify.startNext")) {
                         startNext()
-                        model.startNext = nil
+                        dismiss()
                     }
                     .buttonStyle(RedPillButtonStyle())
                 }

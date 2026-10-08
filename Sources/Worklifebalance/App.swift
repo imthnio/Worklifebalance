@@ -33,6 +33,8 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.imagePosition = .imageLeft
         setIcon(name: .idle)
         statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
+        // Open the panel with either mouse button
+        statusBarItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusBarItem?.button?.target = self
 
         timer = TBTimer()

@@ -113,6 +113,11 @@ class TBTimer: ObservableObject {
         TBStatusItem.shared.setTitle(title: showTimerInMenuBar ? timeLeftString : nil)
     }
 
+    /// When the running round will end
+    var endTime: Date? {
+        state == .work ? finishTime : nil
+    }
+
     func format(seconds: TimeInterval) -> String {
         timerFormatter.string(from: seconds.rounded(.up))!
     }
