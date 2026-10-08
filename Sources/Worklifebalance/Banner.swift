@@ -39,6 +39,20 @@ private class HoverTrackingView: NSView {
     override func mouseExited(with _: NSEvent) { onHover?(false) }
 }
 
+/// Stays red even though the banner never becomes the active window
+private struct RedPillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(tomato))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+    }
+}
+
 private struct BannerView: View {
     @ObservedObject var model: BannerModel
     @ObservedObject private var l10n = L10n.shared
@@ -65,7 +79,7 @@ private struct BannerView: View {
                         startNext()
                         model.startNext = nil
                     }
-                    .controlSize(.small)
+                    .buttonStyle(RedPillButtonStyle())
                 }
             }
             .padding(.horizontal, 14)

@@ -67,7 +67,7 @@ class TBTimer: ObservableObject {
     func startStop() {
         switch state {
         case .idle:
-            startWork(seconds: workIntervalLength * 60, playWindup: true)
+            startWork(seconds: workIntervalLength * 60)
         case .work, .paused:
             stop()
         }
@@ -84,7 +84,7 @@ class TBTimer: ObservableObject {
             TBStatusItem.shared.setIcon(name: .idle)
             updateTimeLeft()
         case .paused:
-            startWork(seconds: Int(pausedTimeLeft.rounded()), playWindup: false)
+            startWork(seconds: Int(pausedTimeLeft.rounded()))
         }
     }
 
@@ -93,7 +93,7 @@ class TBTimer: ObservableObject {
         guard state != .idle else { return }
         cancelTimer()
         state = .idle
-        startWork(seconds: workIntervalLength * 60, playWindup: true)
+        startWork(seconds: workIntervalLength * 60)
     }
 
     func updateTimeLeft() {
@@ -117,15 +117,12 @@ class TBTimer: ObservableObject {
         timerFormatter.string(from: seconds.rounded(.up))!
     }
 
-    private func startWork(seconds: Int, playWindup: Bool) {
+    private func startWork(seconds: Int) {
         if state != .paused {
             totalTime = TimeInterval(seconds)
         }
         state = .work
         TBStatusItem.shared.setIcon(name: .work)
-        if playWindup {
-            player.playWindup()
-        }
         startTimer(seconds: seconds)
     }
 
@@ -138,10 +135,10 @@ class TBTimer: ObservableObject {
 
     private func finish() {
         cancelTimer()
-        player.playDing()
+        player.playAlert()
         let l10n = L10n.shared
         if autoRestart {
-            startWork(seconds: workIntervalLength * 60, playWindup: false)
+            startWork(seconds: workIntervalLength * 60)
         } else {
             state = .idle
             TBStatusItem.shared.setIcon(name: .idle)

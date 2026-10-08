@@ -112,26 +112,12 @@ private struct SoundsView: View {
     @ObservedObject var player: TBPlayer
     @ObservedObject private var l10n = L10n.shared
 
-    private var columns = [
-        GridItem(.flexible()),
-        GridItem(.fixed(110))
-    ]
-
     init(player: TBPlayer) {
         self.player = player
     }
 
     var body: some View {
-        VStack {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
-                Text(l10n.t("sounds.windup"))
-                VolumeSlider(volume: $player.windupVolume)
-                Text(l10n.t("sounds.ding"))
-                VolumeSlider(volume: $player.dingVolume)
-            }
-            Divider()
-            alertSound
-        }
+        alertSound
     }
 
     private var alertSound: some View {
@@ -139,19 +125,21 @@ private struct SoundsView: View {
             Text(l10n.t("sounds.alertFile"))
             HStack(spacing: 6) {
                 Text(player.customAlertSoundPath.isEmpty
-                     ? l10n.t("sounds.default")
+                     ? l10n.t("sounds.none")
                      : URL(fileURLWithPath: player.customAlertSoundPath).lastPathComponent)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundColor(player.customAlertSoundUnavailable ? .red : .secondary)
                     .help(player.customAlertSoundPath)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button {
-                    player.playDing()
-                } label: {
-                    Image(systemName: "play.fill")
+                if !player.customAlertSoundPath.isEmpty {
+                    Button {
+                        player.playAlert()
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .help(l10n.t("sounds.preview"))
                 }
-                .help(l10n.t("sounds.preview"))
                 Button(l10n.t("sounds.choose")) {
                     player.chooseCustomAlertSound()
                 }
@@ -162,12 +150,12 @@ private struct SoundsView: View {
                         Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(l10n.t("sounds.useDefault"))
+                    .help(l10n.t("sounds.remove"))
                 }
             }
             if !player.customAlertSoundPath.isEmpty {
                 HStack {
-                    Text(l10n.t("sounds.customVolume"))
+                    Text(l10n.t("sounds.volume"))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     VolumeSlider(volume: $player.customAlertVolume)
                         .frame(width: 110)
