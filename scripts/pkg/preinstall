@@ -1,0 +1,4 @@
+#!/bin/bash
+# Quit a running copy so it can be replaced
+pkill -x Worklifebalance || true
+exit 0
