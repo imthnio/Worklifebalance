@@ -92,22 +92,37 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         case togglePanel, start, none
     }
 
-    /// Right click (or Control-click) opens the panel, a left double click starts the timer
-    static func clickAction(for event: NSEvent) -> ClickAction {
-        let isRightClick = event.type == .rightMouseUp ||
-            (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+    /// Time of the previous left click on the menu bar icon
+    private var lastLeftClick: TimeInterval?
+
+    /*
+     Right click (or Control-click) opens the panel, a left double click starts the timer.
+     On recent macOS the menu bar relays every click as a separate single click
+     (clickCount is always 1), so double clicks are detected by timing.
+     */
+    func clickAction(isRightClick: Bool, clickCount: Int,
+                     at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> ClickAction {
         if isRightClick {
+            lastLeftClick = nil
             return .togglePanel
         }
-        if event.type == .leftMouseUp, event.clickCount == 2 {
+        if clickCount >= 2 {
+            lastLeftClick = nil
             return .start
         }
+        if let last = lastLeftClick, now - last <= NSEvent.doubleClickInterval {
+            lastLeftClick = nil
+            return .start
+        }
+        lastLeftClick = now
         return .none
     }
 
     @objc func statusItemClicked(_ sender: AnyObject?) {
         guard let event = NSApp.currentEvent else { return }
-        switch Self.clickAction(for: event) {
+        let isRightClick = event.type == .rightMouseUp ||
+            (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+        switch clickAction(isRightClick: isRightClick, clickCount: event.clickCount) {
         case .togglePanel:
             togglePopover(sender)
         case .start:
