@@ -65,6 +65,8 @@ class TBTimer: ObservableObject {
     }
 
     func startStop() {
+        // Starting or stopping by hand means the last reminder has been seen
+        TBBanner.shared.hide()
         switch state {
         case .idle:
             startWork(seconds: workIntervalLength * 60)
@@ -91,6 +93,7 @@ class TBTimer: ObservableObject {
     /// Restarts the current round from the beginning
     func reset() {
         guard state != .idle else { return }
+        TBBanner.shared.hide()
         cancelTimer()
         state = .idle
         startWork(seconds: workIntervalLength * 60)

@@ -101,6 +101,19 @@ private struct BannerView: View {
     }
 }
 
+/// A stretchable rounded-rectangle mask for NSVisualEffectView
+private func roundedMask(radius: CGFloat) -> NSImage {
+    let edge = radius * 2 + 1
+    let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+        NSColor.black.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        return true
+    }
+    image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+    image.resizingMode = .stretch
+    return image
+}
+
 /// A small floating reminder styled after macOS notification banners
 class TBBanner {
     static let shared = TBBanner()
@@ -108,6 +121,8 @@ class TBBanner {
     private let model = BannerModel()
     private var panel: BannerPanel?
     private var hideWorkItem: DispatchWorkItem?
+    /// Bumped on every show/hide so a finished hide animation can't close a newer banner
+    private var generation = 0
 
     func show(title: String, body: String, startNext: (() -> Void)?) {
         model.title = title
@@ -122,13 +137,15 @@ class TBBanner {
                             y: visible.maxY - bannerSize.height - screenMargin,
                             width: bannerSize.width, height: bannerSize.height)
 
+        generation += 1
         if !panel.isVisible {
             // Slide in from beyond the right edge of the screen
             panel.setFrame(target.offsetBy(dx: bannerSize.width + screenMargin * 2, dy: 0),
                            display: false)
-            panel.alphaValue = 1
             panel.orderFrontRegardless()
         }
+        panel.alphaValue = 1
+        panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.45
             // Slight overshoot, like the system's spring-in banners
@@ -141,13 +158,16 @@ class TBBanner {
     func hide() {
         hideWorkItem?.cancel()
         guard let panel = panel, panel.isVisible else { return }
+        generation += 1
+        let hiding = generation
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.25
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().setFrame(panel.frame.offsetBy(dx: bannerSize.width / 2, dy: 0),
                                       display: true)
             panel.animator().alphaValue = 0
-        }, completionHandler: {
+        }, completionHandler: { [weak self] in
+            guard self?.generation == hiding else { return }
             panel.orderOut(nil)
         })
     }
@@ -199,16 +219,18 @@ class TBBanner {
         effect.material = .popover
         effect.blendingMode = .behindWindow
         effect.state = .active
-        effect.wantsLayer = true
+        // A mask (rather than a layer corner radius) also shapes the window shadow,
+        // so the shadow follows the rounded corners instead of a square outline
+        let radius: CGFloat
         if #available(macOS 26, *) {
-            effect.layer?.cornerRadius = 22
-            effect.layer?.cornerCurve = .continuous
+            radius = 22
         } else {
-            effect.layer?.cornerRadius = 16
+            radius = 16
         }
-        effect.layer?.masksToBounds = true
+        effect.maskImage = roundedMask(radius: radius)
         effect.addSubview(hover)
         panel.contentView = effect
+        panel.invalidateShadow()
         return panel
     }
 }
