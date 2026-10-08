@@ -2,13 +2,15 @@ import SwiftUI
 
 private let bannerSize = NSSize(width: 344, height: 72)
 private let screenMargin: CGFloat = 12
-/// Seconds before the banner hides itself (paused while hovered)
-private let displayDuration: TimeInterval = 8
+/*
+ The banner stays until the pointer rests on it for a few seconds
+ or its close button is clicked
+ */
+private let hoverDuration: TimeInterval = 3
 
 private class BannerModel: ObservableObject {
     @Published var title = ""
     @Published var body = ""
-    @Published var hovered = false
     var startNext: (() -> Void)?
 }
 
@@ -61,29 +63,25 @@ private struct BannerView: View {
                 if let startNext = model.startNext {
                     Button(l10n.t("notify.startNext")) {
                         startNext()
-                        dismiss()
+                        model.startNext = nil
                     }
                     .controlSize(.small)
                 }
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: dismiss)
 
-            if model.hovered {
-                Button(action: dismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(.secondary)
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
-                        .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
-                }
-                .buttonStyle(.plain)
-                .help(l10n.t("notify.dismiss"))
-                .padding(5)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                    .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
             }
+            .buttonStyle(.plain)
+            .help(l10n.t("notify.dismiss"))
+            .padding(5)
         }
         .frame(width: bannerSize.width, height: bannerSize.height)
     }
@@ -101,7 +99,6 @@ class TBBanner {
         model.title = title
         model.body = body
         model.startNext = startNext
-        model.hovered = false
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
@@ -124,7 +121,7 @@ class TBBanner {
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.1, 0.35, 1)
             panel.animator().setFrame(target, display: true)
         }
-        scheduleHide(after: displayDuration)
+        hideWorkItem?.cancel()
     }
 
     func hide() {
@@ -145,11 +142,7 @@ class TBBanner {
         hideWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            if self.model.hovered {
-                self.scheduleHide(after: 2)
-            } else {
-                self.hide()
-            }
+            self.hide()
         }
         hideWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
@@ -171,7 +164,14 @@ class TBBanner {
         let frame = NSRect(origin: .zero, size: bannerSize)
         let hover = HoverTrackingView(frame: frame)
         hover.autoresizingMask = [.width, .height]
-        hover.onHover = { [weak self] over in self?.model.hovered = over }
+        hover.onHover = { [weak self] over in
+            guard let self = self else { return }
+            if over {
+                self.scheduleHide(after: hoverDuration)
+            } else {
+                self.hideWorkItem?.cancel()
+            }
+        }
 
         let host = ClickThroughHostingView(rootView: BannerView(model: model) { [weak self] in
             self?.hide()

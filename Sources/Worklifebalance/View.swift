@@ -135,6 +135,47 @@ private struct SoundsView: View {
                 Text(l10n.t("shortcut.toggleTicking"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.toggleStyle(.switch)
+            Divider()
+            alertSound
+        }
+    }
+
+    private var alertSound: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(l10n.t("sounds.alertFile"))
+            HStack(spacing: 6) {
+                Text(player.customAlertSoundPath.isEmpty
+                     ? l10n.t("sounds.default")
+                     : URL(fileURLWithPath: player.customAlertSoundPath).lastPathComponent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundColor(player.customAlertSoundUnavailable ? .red : .secondary)
+                    .help(player.customAlertSoundPath)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    player.playDing()
+                } label: {
+                    Image(systemName: "play.fill")
+                }
+                .help(l10n.t("sounds.preview"))
+                Button(l10n.t("sounds.choose")) {
+                    player.chooseCustomAlertSound()
+                }
+                if !player.customAlertSoundPath.isEmpty {
+                    Button {
+                        player.customAlertSoundPath = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(l10n.t("sounds.useDefault"))
+                }
+            }
+            if player.customAlertSoundUnavailable {
+                Text(l10n.t("sounds.missing"))
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
         }
     }
 }
@@ -385,13 +426,6 @@ struct TBPopoverView: View {
 
     private var footer: some View {
         HStack {
-            Button {
-                NSApp.activate(ignoringOtherApps: true)
-                NSApp.orderFrontStandardAboutPanel()
-            } label: {
-                Label(l10n.t("about"), systemImage: "info.circle")
-            }
-            .keyboardShortcut("a")
             Spacer()
             Button {
                 NSApplication.shared.terminate(self)
