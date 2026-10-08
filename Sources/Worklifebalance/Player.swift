@@ -39,7 +39,7 @@ class TBPlayer: ObservableObject {
     }
 
     private static func load(_ name: String) -> AVAudioPlayer {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "m4a") else {
             fatalError("Missing sound resource: \(name)")
         }
         do {

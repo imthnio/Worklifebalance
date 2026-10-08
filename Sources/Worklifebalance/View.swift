@@ -4,21 +4,35 @@ private struct TimerSettingsView: View {
     @ObservedObject var timer: TBTimer
     @ObservedObject private var l10n = L10n.shared
 
+    private let workLengthRange = 1 ... 120
+
+    /// Typed values are clamped to the allowed range
+    private var workLength: Binding<Int> {
+        Binding(
+            get: { timer.workIntervalLength },
+            set: { timer.workIntervalLength = min(max($0, workLengthRange.lowerBound),
+                                                  workLengthRange.upperBound) }
+        )
+    }
+
     var body: some View {
         VStack {
-            Stepper(value: $timer.workIntervalLength, in: 1 ... 120) {
-                HStack {
-                    Text(l10n.t("timer.workLength"))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(l10n.t("timer.minFormat", timer.workIntervalLength))
-                }
+            HStack {
+                Text(l10n.t("timer.workLength"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                TextField("", value: workLength, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 48)
+                Text(l10n.t("timer.minUnit"))
+                Stepper("", value: $timer.workIntervalLength, in: workLengthRange)
+                    .labelsHidden()
             }
             Toggle(isOn: $timer.autoRestart) {
                 Text(l10n.t("timer.autoRestart"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.toggleStyle(.switch)
         }
-        .padding(4)
     }
 }
 
@@ -52,7 +66,6 @@ private struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.toggleStyle(.switch)
         }
-        .padding(4)
     }
 }
 
@@ -80,7 +93,6 @@ private struct ShortcutsView: View {
                 .controlSize(.small)
             }
         }
-        .padding(4)
     }
 }
 
@@ -124,16 +136,129 @@ private struct SoundsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.toggleStyle(.switch)
         }
-        .padding(4)
     }
 }
 
-private enum ChildView {
+// MARK: - Styling
+
+let tomato = Color(red: 0.96, green: 0.33, blue: 0.27)
+
+private struct ControlButtonStyle<S: Shape>: ButtonStyle {
+    let prominent: Bool
+    let shape: S
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(prominent ? .white : .primary)
+            .controlBackground(prominent: prominent, shape: shape)
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+private extension View {
+    /// Liquid Glass on macOS 26+, a matching flat fill before that
+    @ViewBuilder
+    func controlBackground<S: Shape>(prominent: Bool, shape: S) -> some View {
+        if #available(macOS 26, *) {
+            self.glassEffect(prominent ? .regular.tint(tomato).interactive() : .regular.interactive(),
+                             in: shape)
+        } else {
+            self.background(shape.fill(prominent ? tomato : Color.primary.opacity(0.08)))
+        }
+    }
+
+    func controlStyle<S: Shape>(prominent: Bool, shape: S) -> some View {
+        buttonStyle(ControlButtonStyle(prominent: prominent, shape: shape))
+    }
+
+    @ViewBuilder
+    func countdownTransition() -> some View {
+        if #available(macOS 14, *) {
+            self.contentTransition(.numericText(countsDown: true))
+        } else {
+            self
+        }
+    }
+
+    func card() -> some View {
+        padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+    }
+}
+
+private struct CircleControl: View {
+    let systemImage: String
+    var size: CGFloat = 36
+    var prominent = false
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: size * 0.38, weight: .semibold))
+                .frame(width: size, height: size)
+                .contentShape(Circle())
+        }
+        .controlStyle(prominent: prominent, shape: Circle())
+        .help(help)
+    }
+}
+
+private struct ProgressRing: View {
+    let progress: Double
+    let active: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 9)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(
+                    AngularGradient(colors: [tomato.opacity(0.55), tomato],
+                                    center: .center,
+                                    startAngle: .degrees(0),
+                                    endAngle: .degrees(max(360 * progress, 1))),
+                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .opacity(active ? 1 : 0.35)
+        }
+        .animation(.linear(duration: 1), value: progress)
+        .animation(.easeInOut(duration: 0.3), value: active)
+    }
+}
+
+// MARK: - Popover
+
+private enum ChildView: CaseIterable {
     case timer, settings, shortcuts, sounds
+
+    var icon: String {
+        switch self {
+        case .timer: return "timer"
+        case .settings: return "gearshape"
+        case .shortcuts: return "command"
+        case .sounds: return "speaker.wave.2"
+        }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .timer: return "tab.timer"
+        case .settings: return "tab.settings"
+        case .shortcuts: return "tab.shortcuts"
+        case .sounds: return "tab.sounds"
+        }
+    }
 }
 
 private class PopoverUIState: ObservableObject {
-    @Published var buttonHovered = false
     @Published var activeChildView = ChildView.timer
 }
 
@@ -141,78 +266,104 @@ struct TBPopoverView: View {
     @ObservedObject var timer: TBTimer
     @ObservedObject private var l10n = L10n.shared
     @StateObject private var ui = PopoverUIState()
+    @ObservedObject private var hotKeys = HotKeyCenter.shared
 
-    private var mainLabel: String {
+    private var displayTime: String {
+        timer.state == .idle
+            ? timer.format(seconds: TimeInterval(timer.workIntervalLength * 60))
+            : timer.timeLeftString
+    }
+
+    private var statusText: String {
         switch timer.state {
-        case .idle:
-            return l10n.t("start")
-        case .work, .paused:
-            return ui.buttonHovered ? l10n.t("stop") : timer.timeLeftString
+        case .idle: return l10n.t("status.ready")
+        case .work: return l10n.t("status.focusing")
+        case .paused: return l10n.t("paused")
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Button {
-                    timer.startStop()
-                    TBStatusItem.shared.closePopover(nil)
-                } label: {
-                    Text(mainLabel)
-                        /*
-                          When appearance is set to "Dark" and accent color is set to "Graphite"
-                          "defaultAction" button label's color is set to the same color as the
-                          button, making the button look blank.
-                         */
-                        .foregroundColor(Color.white)
-                        .font(.system(.body).monospacedDigit())
-                        .frame(maxWidth: .infinity)
-                }
-                .onHover { over in
-                    ui.buttonHovered = over
-                }
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
+        VStack(spacing: 14) {
+            clock
+            controls
+            tabs
+            footer
+        }
+        .frame(width: 280)
+        .padding(16)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: timer.state)
+    }
 
-                if timer.state != .idle {
-                    Button {
-                        timer.pauseResume()
-                    } label: {
-                        Image(systemName: timer.state == .paused ? "play.fill" : "pause.fill")
-                            .frame(width: 20)
-                    }
-                    .controlSize(.large)
-                    .help(timer.state == .paused ? l10n.t("resume") : l10n.t("pause"))
-
-                    Button {
-                        timer.reset()
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .frame(width: 20)
-                    }
-                    .controlSize(.large)
-                    .help(l10n.t("reset"))
-                }
-            }
-
-            if timer.state == .paused {
-                Text(l10n.t("paused"))
-                    .font(.caption)
+    private var clock: some View {
+        ZStack {
+            ProgressRing(progress: timer.progress, active: timer.state == .work)
+            VStack(spacing: 2) {
+                Text(displayTime)
+                    .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .countdownTransition()
+                    .animation(.spring(response: 0.3, dampingFraction: 0.9), value: displayTime)
+                    .opacity(timer.state == .paused ? 0.45 : 1)
+                    .animation(timer.state == .paused
+                               ? .easeInOut(duration: 0.9).repeatForever()
+                               : .default,
+                               value: timer.state == .paused)
+                Text(statusText)
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+                    .id(statusText)
             }
+        }
+        .frame(width: 168, height: 168)
+        .padding(.top, 4)
+    }
 
-            Picker("", selection: $ui.activeChildView) {
-                Text(l10n.t("tab.timer")).tag(ChildView.timer)
-                Text(l10n.t("tab.settings")).tag(ChildView.settings)
-                Text(l10n.t("tab.shortcuts")).tag(ChildView.shortcuts)
-                Text(l10n.t("tab.sounds")).tag(ChildView.sounds)
+    @ViewBuilder
+    private var controls: some View {
+        if timer.state == .idle {
+            Button {
+                timer.startStop()
+            } label: {
+                Label(l10n.t("start"), systemImage: "play.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 150, height: 36)
+                    .contentShape(Capsule())
+            }
+            .controlStyle(prominent: true, shape: Capsule())
+            .keyboardShortcut(.defaultAction)
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+        } else {
+            HStack(spacing: 18) {
+                CircleControl(systemImage: "arrow.counterclockwise",
+                              help: l10n.t("reset")) { timer.reset() }
+                CircleControl(systemImage: timer.state == .paused ? "play.fill" : "pause.fill",
+                              size: 48, prominent: true,
+                              help: timer.state == .paused ? l10n.t("resume") : l10n.t("pause")) {
+                    timer.pauseResume()
+                }
+                .keyboardShortcut(.defaultAction)
+                CircleControl(systemImage: "stop.fill",
+                              help: l10n.t("stop")) { timer.startStop() }
+            }
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+        }
+    }
+
+    private var tabs: some View {
+        VStack(spacing: 10) {
+            Picker("", selection: $ui.activeChildView.animation(.spring(response: 0.3,
+                                                                       dampingFraction: 0.85))) {
+                ForEach(ChildView.allCases, id: \.self) { child in
+                    Image(systemName: child.icon)
+                        .help(l10n.t(child.titleKey))
+                        .tag(child)
+                }
             }
             .labelsHidden()
-            .frame(maxWidth: .infinity)
             .pickerStyle(.segmented)
 
-            GroupBox {
+            Group {
                 switch ui.activeChildView {
                 case .timer:
                     TimerSettingsView(timer: timer)
@@ -224,30 +375,36 @@ struct TBPopoverView: View {
                     SoundsView(player: timer.player)
                 }
             }
+            .font(.system(size: 12))
+            .controlSize(.small)
+            .card()
+            .id(ui.activeChildView)
+            .transition(.opacity.combined(with: .offset(y: 6)))
+        }
+    }
 
-            Group {
-                Button {
-                    NSApp.activate(ignoringOtherApps: true)
-                    NSApp.orderFrontStandardAboutPanel()
-                } label: {
-                    Text(l10n.t("about"))
-                    Spacer()
-                    Text("⌘ A").foregroundColor(Color.gray)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("a")
-                Button {
-                    NSApplication.shared.terminate(self)
-                } label: {
+    private var footer: some View {
+        HStack {
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.orderFrontStandardAboutPanel()
+            } label: {
+                Label(l10n.t("about"), systemImage: "info.circle")
+            }
+            .keyboardShortcut("a")
+            Spacer()
+            Button {
+                NSApplication.shared.terminate(self)
+            } label: {
+                HStack(spacing: 4) {
                     Text(l10n.t("quit"))
-                    Spacer()
-                    Text("⌘ Q").foregroundColor(Color.gray)
+                    Text(hotKeys.hotKeys[.quit]?.displayString ?? "")
+                        .foregroundColor(.secondary.opacity(0.7))
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut("q")
             }
         }
-        .frame(width: 300)
-        .padding(12)
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .foregroundColor(.secondary)
     }
 }

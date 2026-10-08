@@ -2,7 +2,7 @@ import Carbon
 import SwiftUI
 
 enum HotKeyAction: String, CaseIterable, Codable, Identifiable {
-    case startStop, pauseResume, reset, togglePopover, toggleTicking
+    case startStop, pauseResume, reset, togglePopover, toggleTicking, quit
 
     var id: String { rawValue }
 
@@ -16,11 +16,14 @@ enum HotKeyAction: String, CaseIterable, Codable, Identifiable {
         case .reset: return HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: mods)
         case .togglePopover: return HotKey(keyCode: UInt32(kVK_ANSI_T), modifiers: mods)
         case .toggleTicking: return HotKey(keyCode: UInt32(kVK_ANSI_M), modifiers: mods)
+        case .quit: return HotKey.commandQ
         }
     }
 }
 
 struct HotKey: Codable, Equatable {
+    static let commandQ = HotKey(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(cmdKey))
+
     var keyCode: UInt32
     /// Carbon modifier mask (cmdKey, optionKey, controlKey, shiftKey)
     var modifiers: UInt32
@@ -28,6 +31,11 @@ struct HotKey: Codable, Equatable {
     init(keyCode: UInt32, modifiers: UInt32) {
         self.keyCode = keyCode
         self.modifiers = modifiers
+    }
+
+    /// Whether the event is this exact key combination
+    func matches(_ event: NSEvent) -> Bool {
+        HotKey(event: event) == self
     }
 
     init?(event: NSEvent) {
@@ -93,6 +101,11 @@ private func keyName(for keyCode: UInt32) -> String {
 
 private let hotKeySignature: OSType = 0x574C_4231 // "WLB1"
 private let storageKey = "hotKeys"
+private let knownActionsKey = "hotKeysKnownActions"
+/// Actions that existed in 1.0, before known actions were tracked
+private let initialActions: [HotKeyAction] = [
+    .startStop, .pauseResume, .reset, .togglePopover, .toggleTicking,
+]
 
 class HotKeyCenter: ObservableObject {
     static let shared = HotKeyCenter()
@@ -100,12 +113,27 @@ class HotKeyCenter: ObservableObject {
     @Published private(set) var hotKeys: [HotKeyAction: HotKey] = [:]
     private var handlers: [HotKeyAction: () -> Void] = [:]
     private var refs: [HotKeyAction: EventHotKeyRef] = [:]
-    private var suspended = false
+    private(set) var suspended = false
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode([HotKeyAction: HotKey].self, from: data) {
-            hotKeys = saved
+            /*
+             Keep the user's shortcuts across updates. Actions added in newer
+             versions get their default shortcut, unless it is already taken.
+             */
+            var keys = saved
+            let known = defaults.stringArray(forKey: knownActionsKey)?
+                .compactMap(HotKeyAction.init(rawValue:)) ?? initialActions
+            for action in HotKeyAction.allCases where !known.contains(action) {
+                let key = action.defaultHotKey
+                if !keys.values.contains(key) {
+                    keys[action] = key
+                }
+            }
+            hotKeys = keys
+            save()
         } else {
             restoreDefaults()
         }
@@ -173,6 +201,8 @@ class HotKeyCenter: ObservableObject {
     private func save() {
         if let data = try? JSONEncoder().encode(hotKeys) {
             UserDefaults.standard.set(data, forKey: storageKey)
+            UserDefaults.standard.set(HotKeyAction.allCases.map(\.rawValue),
+                                      forKey: knownActionsKey)
         }
     }
 
@@ -188,6 +218,9 @@ class HotKeyCenter: ObservableObject {
         guard !suspended else { return }
         for (index, action) in HotKeyAction.allCases.enumerated() {
             guard let key = hotKeys[action], handlers[action] != nil else { continue }
+            // A global ⌘Q would quit this app instead of the frontmost one;
+            // it is handled inside the app's own windows instead
+            if key == HotKey.commandQ { continue }
             var ref: EventHotKeyRef?
             let hkID = EventHotKeyID(signature: hotKeySignature, id: UInt32(index))
             let status = RegisterEventHotKey(key.keyCode, key.modifiers, hkID,

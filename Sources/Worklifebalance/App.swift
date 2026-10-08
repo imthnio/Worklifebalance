@@ -40,6 +40,16 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         controller.sizingOptions = [.preferredContentSize]
         popover.behavior = .transient
         popover.contentViewController = controller
+
+        // In-app shortcuts (e.g. ⌘Q) for the panel and the reminder banner
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let hotKeys = HotKeyCenter.shared
+            if !hotKeys.suspended, hotKeys.hotKeys[.quit]?.matches(event) == true {
+                NSApp.terminate(nil)
+                return nil
+            }
+            return event
+        }
     }
 
     func setTitle(title: String?) {
@@ -68,6 +78,8 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: NSRectEdge.minY)
             popover.contentViewController?.view.window?.makeKey()
+            // Don't start editing the duration field right away
+            popover.contentViewController?.view.window?.makeFirstResponder(nil)
         }
     }
 

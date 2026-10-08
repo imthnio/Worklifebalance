@@ -16,7 +16,8 @@ mkdir -p "$BUILD"
 echo "==> Compiling ($VERSION)"
 for arch in arm64 x86_64; do
     swift build -c release --triple "$arch-apple-macosx13.0" \
-        --scratch-path "$ROOT/.build/$arch"
+        --scratch-path "$ROOT/.build/$arch" \
+        -Xswiftc -Osize -Xlinker -dead_strip
 done
 
 echo "==> Assembling $NAME.app"
@@ -25,6 +26,7 @@ lipo -create \
     "$ROOT/.build/arm64/release/$NAME" \
     "$ROOT/.build/x86_64/release/$NAME" \
     -output "$APP/Contents/MacOS/$NAME"
+strip -x "$APP/Contents/MacOS/$NAME"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
