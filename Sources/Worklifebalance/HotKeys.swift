@@ -281,6 +281,9 @@ struct HotKeyRecorder: View {
             }
         }
         .onDisappear { stopRecording() }
+        .onReceive(NotificationCenter.default.publisher(for: .tbPopoverDidClose)) { _ in
+            stopRecording()
+        }
     }
 
     private var label: String {

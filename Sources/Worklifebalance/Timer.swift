@@ -81,9 +81,10 @@ class TBTimer: ObservableObject {
             return
         case .work:
             pausedTimeLeft = max(finishTime.timeIntervalSince(Date()), 0)
+            TBStats.shared.end()
             cancelTimer()
             state = .paused
-            TBStatusItem.shared.setIcon(name: .idle)
+            TBStatusItem.shared.setIcon(working: false)
             updateTimeLeft()
         case .paused:
             startWork(seconds: Int(pausedTimeLeft.rounded()))
@@ -94,9 +95,25 @@ class TBTimer: ObservableObject {
     func reset() {
         guard state != .idle else { return }
         TBBanner.shared.hide()
+        TBStats.shared.end()
         cancelTimer()
         state = .idle
         startWork(seconds: workIntervalLength * 60)
+    }
+
+    /// Sets a new focus length; a round in progress starts over with it (a paused one stays paused)
+    func setWorkLength(minutes: Int) {
+        workIntervalLength = min(max(minutes, 1), 120)
+        switch state {
+        case .idle:
+            objectWillChange.send()
+        case .work:
+            reset()
+        case .paused:
+            pausedTimeLeft = TimeInterval(workIntervalLength * 60)
+            totalTime = pausedTimeLeft
+            updateTimeLeft()
+        }
     }
 
     func updateTimeLeft() {
@@ -130,18 +147,21 @@ class TBTimer: ObservableObject {
             totalTime = TimeInterval(seconds)
         }
         state = .work
-        TBStatusItem.shared.setIcon(name: .work)
+        TBStatusItem.shared.setIcon(working: true)
+        TBStats.shared.begin()
         startTimer(seconds: seconds)
     }
 
     private func stop() {
+        TBStats.shared.end()
         cancelTimer()
         state = .idle
-        TBStatusItem.shared.setIcon(name: .idle)
+        TBStatusItem.shared.setIcon(working: false)
         updateTimeLeft()
     }
 
     private func finish() {
+        TBStats.shared.end()
         cancelTimer()
         player.playAlert()
         let l10n = L10n.shared
@@ -149,7 +169,7 @@ class TBTimer: ObservableObject {
             startWork(seconds: workIntervalLength * 60)
         } else {
             state = .idle
-            TBStatusItem.shared.setIcon(name: .idle)
+            TBStatusItem.shared.setIcon(working: false)
             updateTimeLeft()
         }
         TBBanner.shared.show(
@@ -181,6 +201,7 @@ class TBTimer: ObservableObject {
         /* Cannot publish updates from background thread */
         DispatchQueue.main.async { [self] in
             guard state == .work else { return }
+            TBStats.shared.mark()
             updateTimeLeft()
             let timeLeft = finishTime.timeIntervalSince(Date())
             if timeLeft <= 0 {

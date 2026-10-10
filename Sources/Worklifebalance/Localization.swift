@@ -51,6 +51,11 @@ class L10n: ObservableObject {
         language == .system ? AppLanguage.fromSystem() : language
     }
 
+    /// Locale for dates and durations in the chosen language
+    var locale: Locale {
+        Locale(identifier: effectiveLanguage.rawValue)
+    }
+
     func t(_ key: String) -> String {
         let lang = effectiveLanguage
         return translations[lang]?[key] ?? translations[.en]?[key] ?? key
@@ -71,6 +76,13 @@ private let translations: [AppLanguage: [String: String]] = [
         "paused": "已暂停",
         "status.ready": "准备开始",
         "status.focusing": "专注中",
+        "stats.title": "统计",
+        "stats.today": "今日专注",
+        "stats.monthTotal": "本月合计",
+        "stats.daily": "每日专注",
+        "stats.none": "这个月还没有专注记录",
+        "timer.editHint": "双击修改时长",
+        "timer.editKeys": "输入数字，或用 ↑↓ / 滚轮调整，回车确认",
         "tab.timer": "计时",
         "tab.settings": "设置",
         "tab.shortcuts": "快捷键",
@@ -114,6 +126,13 @@ private let translations: [AppLanguage: [String: String]] = [
         "paused": "已暫停",
         "status.ready": "準備開始",
         "status.focusing": "專注中",
+        "stats.title": "統計",
+        "stats.today": "今日專注",
+        "stats.monthTotal": "本月合計",
+        "stats.daily": "每日專注",
+        "stats.none": "這個月還沒有專注記錄",
+        "timer.editHint": "雙擊修改時長",
+        "timer.editKeys": "輸入數字，或用 ↑↓ / 滾輪調整，Return 確認",
         "tab.timer": "計時",
         "tab.settings": "設定",
         "tab.shortcuts": "快速鍵",
@@ -157,6 +176,13 @@ private let translations: [AppLanguage: [String: String]] = [
         "paused": "Paused",
         "status.ready": "Ready",
         "status.focusing": "Focusing",
+        "stats.title": "Statistics",
+        "stats.today": "Focused today",
+        "stats.monthTotal": "This month",
+        "stats.daily": "Daily focus",
+        "stats.none": "No focus time recorded this month",
+        "timer.editHint": "Double-click to change the length",
+        "timer.editKeys": "Type a number, or use ↑↓ / scroll, then Return",
         "tab.timer": "Timer",
         "tab.settings": "Settings",
         "tab.shortcuts": "Shortcuts",
@@ -200,6 +226,13 @@ private let translations: [AppLanguage: [String: String]] = [
         "paused": "En pausa",
         "status.ready": "Listo",
         "status.focusing": "Enfocado",
+        "stats.title": "Estadísticas",
+        "stats.today": "Enfoque de hoy",
+        "stats.monthTotal": "Este mes",
+        "stats.daily": "Enfoque diario",
+        "stats.none": "Aún no hay tiempo de enfoque este mes",
+        "timer.editHint": "Doble clic para cambiar la duración",
+        "timer.editKeys": "Escribe un número o usa ↑↓ / la rueda; Intro para confirmar",
         "tab.timer": "Temporizador",
         "tab.settings": "Ajustes",
         "tab.shortcuts": "Atajos",
@@ -243,6 +276,13 @@ private let translations: [AppLanguage: [String: String]] = [
         "paused": "一時停止中",
         "status.ready": "準備完了",
         "status.focusing": "集中しています",
+        "stats.title": "統計",
+        "stats.today": "今日の集中",
+        "stats.monthTotal": "今月の合計",
+        "stats.daily": "毎日の集中",
+        "stats.none": "今月の集中記録はまだありません",
+        "timer.editHint": "ダブルクリックで時間を変更",
+        "timer.editKeys": "数字を入力、または ↑↓ / スクロールで調整し Return で確定",
         "tab.timer": "タイマー",
         "tab.settings": "設定",
         "tab.shortcuts": "ショートカット",

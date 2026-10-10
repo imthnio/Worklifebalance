@@ -319,9 +319,114 @@ private struct CircleButton: View {
     }
 }
 
+/// Number field for the focus length: type digits, ↑/↓ or scroll to adjust, Return to confirm, Esc to cancel
+private final class MinutesTextField: NSTextField {
+    var onStep: ((Int) -> Void)?
+    private var scrollAccumulator: CGFloat = 0
+
+    override func scrollWheel(with event: NSEvent) {
+        var delta = event.scrollingDeltaY
+        if event.isDirectionInvertedFromDevice { delta = -delta }
+        // Trackpads send many small deltas; mouse wheels send whole lines
+        let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 8 : 1
+        scrollAccumulator += delta
+        while abs(scrollAccumulator) >= threshold {
+            onStep?(scrollAccumulator > 0 ? 1 : -1)
+            scrollAccumulator -= scrollAccumulator > 0 ? threshold : -threshold
+        }
+    }
+}
+
+private struct MinutesField: NSViewRepresentable {
+    @Binding var value: Int
+    let onCommit: () -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> MinutesTextField {
+        let field = MinutesTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.alignment = .center
+        field.font = .monospacedDigitSystemFont(ofSize: 44, weight: .light)
+        field.stringValue = "\(value)"
+        field.delegate = context.coordinator
+        field.onStep = { context.coordinator.step($0) }
+        context.coordinator.field = field
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        }
+        return field
+    }
+
+    func updateNSView(_ field: MinutesTextField, context: Context) {
+        context.coordinator.parent = self
+        if Int(field.stringValue) != value, !(field.stringValue.isEmpty && value == 0) {
+            field.stringValue = "\(value)"
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: MinutesField
+        weak var field: NSTextField?
+        private var finished = false
+
+        init(_ parent: MinutesField) { self.parent = parent }
+
+        func step(_ delta: Int) {
+            let next = min(max(parent.value + delta, 1), 120)
+            parent.value = next
+            field?.stringValue = "\(next)"
+            field?.currentEditor()?.selectAll(nil)
+        }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = field else { return }
+            let digits = String(field.stringValue.filter(\.isNumber).prefix(3))
+            if digits != field.stringValue { field.stringValue = digits }
+            parent.value = Int(digits) ?? 0
+        }
+
+        func control(_: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                finish(commit: true)
+            case #selector(NSResponder.cancelOperation(_:)):
+                finish(commit: false)
+            case #selector(NSResponder.moveUp(_:)):
+                step(1)
+            case #selector(NSResponder.moveDown(_:)):
+                step(-1)
+            default:
+                return false
+            }
+            return true
+        }
+
+        func controlTextDidEndEditing(_: Notification) {
+            finish(commit: true)
+        }
+
+        private func finish(commit: Bool) {
+            guard !finished else { return }
+            finished = true
+            commit ? parent.onCommit() : parent.onCancel()
+        }
+    }
+}
+
+private class TimeEditState: ObservableObject {
+    @Published var editing = false
+    @Published var minutes = 25
+}
+
 private struct TimerPage: View {
     @ObservedObject var timer: TBTimer
     @ObservedObject private var l10n = L10n.shared
+    @StateObject private var edit = TimeEditState()
 
     private var displayTime: String {
         timer.state == .idle
@@ -335,28 +440,91 @@ private struct TimerPage: View {
             controls
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: timer.state)
+        .onReceive(NotificationCenter.default.publisher(for: .tbPopoverDidClose)) { _ in
+            if edit.editing { commitEdit() }
+        }
+    }
+
+    private func beginEdit() {
+        edit.minutes = timer.workIntervalLength
+        withAnimation(.easeOut(duration: 0.15)) { edit.editing = true }
+    }
+
+    private func commitEdit() {
+        guard edit.editing else { return }
+        if edit.minutes > 0, edit.minutes != timer.workIntervalLength || timer.state != .idle {
+            timer.setWorkLength(minutes: edit.minutes)
+        }
+        withAnimation(.easeOut(duration: 0.15)) { edit.editing = false }
+    }
+
+    private func cancelEdit() {
+        withAnimation(.easeOut(duration: 0.15)) { edit.editing = false }
     }
 
     private var clock: some View {
         ZStack {
             ProgressRing(progress: timer.progress, active: timer.state == .work)
-            VStack(spacing: 4) {
-                Text(displayTime)
-                    .font(.system(size: 44, weight: .light))
-                    .monospacedDigit()
-                    .countdownTransition()
-                    .animation(.spring(response: 0.3, dampingFraction: 0.9), value: displayTime)
-                    .opacity(timer.state == .paused ? 0.45 : 1)
-                    .animation(timer.state == .paused
-                               ? .easeInOut(duration: 0.9).repeatForever()
-                               : .default,
-                               value: timer.state == .paused)
-                subtitle
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
+            if edit.editing {
+                editor
+            } else {
+                VStack(spacing: 4) {
+                    Text(displayTime)
+                        .font(.system(size: 44, weight: .light))
+                        .monospacedDigit()
+                        .countdownTransition()
+                        .animation(.spring(response: 0.3, dampingFraction: 0.9), value: displayTime)
+                        .opacity(timer.state == .paused ? 0.45 : 1)
+                        .animation(timer.state == .paused
+                                   ? .easeInOut(duration: 0.9).repeatForever()
+                                   : .default,
+                                   value: timer.state == .paused)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2, perform: beginEdit)
+                        .help(l10n.t("timer.editHint"))
+                    subtitle
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .frame(width: 196, height: 196)
+    }
+
+    private var editor: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                MinutesField(value: $edit.minutes, onCommit: commitEdit, onCancel: cancelEdit)
+                    .frame(width: 92, height: 54)
+                VStack(spacing: 2) {
+                    stepButton("chevron.up", 1)
+                    stepButton("chevron.down", -1)
+                }
+            }
+            .padding(.leading, 22)
+            Text(l10n.t("timer.minUnit"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(l10n.t("timer.editKeys"))
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(width: 150)
+        }
+        .transition(.opacity)
+    }
+
+    private func stepButton(_ symbol: String, _ delta: Int) -> some View {
+        Button {
+            edit.minutes = min(max(edit.minutes + delta, 1), 120)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 18, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.secondary)
     }
 
     @ViewBuilder
@@ -415,20 +583,146 @@ private struct TimerPage: View {
                     timer.pauseResume()
                 }
             }
-            .keyboardShortcut(.defaultAction)
+            // Return belongs to the number field while editing
+            .keyboardShortcut(edit.editing ? nil : .defaultAction)
         }
         .padding(.horizontal, 6)
+    }
+}
+
+// MARK: - Statistics page
+
+private struct StatsPage: View {
+    @ObservedObject var ui: PopoverUIState
+    @ObservedObject private var stats = TBStats.shared
+    @ObservedObject private var l10n = L10n.shared
+
+    private var calendar: Calendar { Calendar.current }
+
+    private var isCurrentMonth: Bool {
+        calendar.isDate(ui.statsMonth, equalTo: Date(), toGranularity: .month)
+    }
+
+    private func formatted(_ date: Date, _ template: String) -> String {
+        let f = DateFormatter()
+        f.locale = l10n.locale
+        f.setLocalizedDateFormatFromTemplate(template)
+        return f.string(from: date)
+    }
+
+    private func shiftMonth(_ delta: Int) {
+        if let month = calendar.date(byAdding: .month, value: delta, to: ui.statsMonth) {
+            withAnimation(.easeOut(duration: 0.2)) { ui.statsMonth = month }
+        }
+    }
+
+    var body: some View {
+        let days = stats.days(inMonthOf: ui.statsMonth).reversed()
+        let longest = max(days.map { stats.seconds(on: $0) }.max() ?? 0, 1)
+        VStack(alignment: .leading, spacing: 16) {
+            summary
+            monthSwitcher
+            SettingsSection(title: l10n.t("stats.daily")) {
+                if stats.total(inMonthOf: ui.statsMonth) == 0 {
+                    Text(l10n.t("stats.none"))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(Array(days.enumerated()), id: \.element) { index, day in
+                        dayRow(day, longest: longest, divider: index < days.count - 1)
+                    }
+                }
+            }
+        }
+        .font(.system(size: 13))
+    }
+
+    private var summary: some View {
+        HStack(spacing: 10) {
+            tile(title: l10n.t("stats.today"), value: stats.today)
+            tile(title: isCurrentMonth ? l10n.t("stats.monthTotal") : formatted(ui.statsMonth, "yMMMM"),
+                 value: stats.total(inMonthOf: ui.statsMonth))
+        }
+    }
+
+    private func tile(title: String, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            Text(formatDuration(value))
+                .font(.system(size: 18, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+    }
+
+    private var monthSwitcher: some View {
+        HStack {
+            Button { shiftMonth(-1) } label: {
+                Image(systemName: "chevron.left").frame(width: 24, height: 22).contentShape(Rectangle())
+            }
+            Spacer()
+            Text(formatted(ui.statsMonth, "yMMMM"))
+                .font(.system(size: 13, weight: .semibold))
+            Spacer()
+            Button { shiftMonth(1) } label: {
+                Image(systemName: "chevron.right").frame(width: 24, height: 22).contentShape(Rectangle())
+            }
+            .disabled(isCurrentMonth)
+            .opacity(isCurrentMonth ? 0.3 : 1)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dayRow(_ day: Date, longest: Double, divider: Bool) -> some View {
+        let seconds = stats.seconds(on: day)
+        let isToday = calendar.isDateInToday(day)
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(formatted(day, "MMMdEEE"))
+                    .fontWeight(isToday ? .semibold : .regular)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .frame(width: 86, alignment: .leading)
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(pauseOrange.opacity(seconds > 0 ? 0.85 : 0))
+                        .frame(width: max(geo.size.width * seconds / longest, seconds > 0 ? 4 : 0), height: 6)
+                        .frame(maxHeight: .infinity, alignment: .center)
+                }
+                .frame(height: 14)
+                Text(seconds >= 60 ? formatDuration(seconds, compact: true) : "—")
+                    .monospacedDigit()
+                    .foregroundColor(seconds >= 60 ? .primary : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 92, alignment: .trailing)
+            }
+            .padding(.vertical, 6)
+            if divider { Divider() }
+        }
     }
 }
 
 // MARK: - Popover
 
 private enum Page {
-    case timer, settings
+    case timer, settings, stats
 }
 
 private class PopoverUIState: ObservableObject {
     @Published var page = Page.timer
+    @Published var statsMonth = Date()
 }
 
 struct TBPopoverView: View {
@@ -436,6 +730,7 @@ struct TBPopoverView: View {
     @ObservedObject private var l10n = L10n.shared
     @StateObject private var ui = PopoverUIState()
     @ObservedObject private var hotKeys = HotKeyCenter.shared
+    @ObservedObject private var stats = TBStats.shared
 
     var body: some View {
         ZStack {
@@ -444,12 +739,24 @@ struct TBPopoverView: View {
                 timerPage
                     .transition(.move(edge: .leading).combined(with: .opacity))
             case .settings:
-                settingsPage
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                subpage(title: l10n.t("tab.settings")) {
+                    SettingsPage(timer: timer, player: timer.player)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            case .stats:
+                subpage(title: l10n.t("stats.title")) {
+                    StatsPage(ui: ui)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(width: 290)
         .clipped()
+        .onReceive(NotificationCenter.default.publisher(for: .tbPopoverWillShow)) { _ in
+            // Always open on the timer, with this month's figures
+            ui.page = .timer
+            ui.statsMonth = Date()
+        }
     }
 
     private func go(to page: Page) {
@@ -463,6 +770,9 @@ struct TBPopoverView: View {
             TimerPage(timer: timer)
                 .padding(.top, 18)
                 .padding(.horizontal, 16)
+            todayCard
+                .padding(.horizontal, 14)
+                .padding(.top, 4)
             Divider()
                 .padding(.horizontal, 14)
             VStack(spacing: 0) {
@@ -480,10 +790,39 @@ struct TBPopoverView: View {
         }
     }
 
-    private var settingsPage: some View {
+    /// Today's focus total; opens the statistics
+    private var todayCard: some View {
+        Button {
+            go(to: .stats)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.bar.fill")
+                    .foregroundColor(pauseOrange)
+                Text(l10n.t("stats.today"))
+                Spacer()
+                Text(formatDuration(stats.today))
+                    .monospacedDigit()
+                    .foregroundColor(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func subpage<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0) {
             ZStack {
-                Text(l10n.t("tab.settings"))
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
                 HStack {
                     Button {
@@ -503,7 +842,7 @@ struct TBPopoverView: View {
             .padding(.vertical, 8)
             Divider()
             ScrollView {
-                SettingsPage(timer: timer, player: timer.player)
+                content()
                     .padding(14)
             }
             .frame(height: 440)

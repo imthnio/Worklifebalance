@@ -1,10 +1,5 @@
 import SwiftUI
 
-extension NSImage.Name {
-    static let idle = Self("BarIconIdle")
-    static let work = Self("BarIconWork")
-}
-
 private let digitFont = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular)
 
 @main
@@ -20,18 +15,30 @@ struct TBApp: App {
     }
 }
 
-class TBStatusItem: NSObject, NSApplicationDelegate {
+extension Notification.Name {
+    static let tbPopoverWillShow = Notification.Name("tbPopoverWillShow")
+    static let tbPopoverDidClose = Notification.Name("tbPopoverDidClose")
+}
+
+class TBStatusItem: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var popover = NSPopover()
     private var statusBarItem: NSStatusItem?
     private var timer: TBTimer!
+    private var termSignal: DispatchSourceSignal?
     static var shared: TBStatusItem!
 
     func applicationDidFinishLaunching(_: Notification) {
+        // The installer quits the running copy with SIGTERM; exit normally so focus time is saved
+        signal(SIGTERM, SIG_IGN)
+        termSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termSignal?.setEventHandler { NSApp.terminate(nil) }
+        termSignal?.resume()
+
         statusBarItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.variableLength
         )
         statusBarItem?.button?.imagePosition = .imageLeft
-        setIcon(name: .idle)
+        setIcon(working: false)
         statusBarItem?.button?.action = #selector(TBStatusItem.statusItemClicked(_:))
         statusBarItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusBarItem?.button?.target = self
@@ -40,6 +47,7 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         let controller = NSHostingController(rootView: TBPopoverView(timer: timer))
         controller.sizingOptions = [.preferredContentSize]
         popover.behavior = .transient
+        popover.delegate = self
         popover.contentViewController = controller
 
         // In-app shortcuts (e.g. ⌘Q) for the panel and the reminder banner
@@ -68,14 +76,25 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.attributedTitle = attributedTitle
     }
 
-    func setIcon(name: NSImage.Name) {
-        let image = Bundle.main.image(forResource: name)
-        image?.isTemplate = true
-        statusBarItem?.button?.image = image
+    func setIcon(working: Bool) {
+        statusBarItem?.button?.image = working ? workIcon : idleIcon
+    }
+
+    private let idleIcon = catHeadImage(filled: false)
+    private let workIcon = catHeadImage(filled: true)
+
+    func applicationWillTerminate(_: Notification) {
+        // Keep the focus time of a round that is still running
+        TBStats.shared.end()
+    }
+
+    func popoverDidClose(_: Notification) {
+        NotificationCenter.default.post(name: .tbPopoverDidClose, object: nil)
     }
 
     func showPopover(_: AnyObject?) {
         if let button = statusBarItem?.button {
+            NotificationCenter.default.post(name: .tbPopoverWillShow, object: nil)
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: NSRectEdge.minY)
             popover.contentViewController?.view.window?.makeKey()
