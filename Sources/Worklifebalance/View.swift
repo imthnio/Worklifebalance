@@ -174,6 +174,7 @@ private struct SettingsPage: View {
         }
         .font(.system(size: 13))
         .controlSize(.small)
+        .onAppear { player.refreshAlertSound() }
     }
 
     private var timerSection: some View {
@@ -294,7 +295,7 @@ private struct ProgressRing: View {
                 .rotationEffect(.degrees(-90))
                 .opacity(active ? 1 : 0.4)
         }
-        .animation(.linear(duration: 1), value: progress)
+        .animation(active ? .linear(duration: 1) : .easeOut(duration: 0.25), value: progress)
         .animation(.easeInOut(duration: 0.3), value: active)
     }
 }
@@ -325,6 +326,10 @@ private final class MinutesTextField: NSTextField {
     private var scrollAccumulator: CGFloat = 0
 
     override func scrollWheel(with event: NSEvent) {
+        if event.phase == .ended || event.phase == .cancelled {
+            scrollAccumulator = 0
+        }
+        guard event.momentumPhase == [] else { return }
         var delta = event.scrollingDeltaY
         if event.isDirectionInvertedFromDevice { delta = -delta }
         // Trackpads send many small deltas; mouse wheels send whole lines
@@ -440,6 +445,9 @@ private struct TimerPage: View {
             controls
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: timer.state)
+        .onChange(of: timer.state) { _ in
+            if edit.editing { cancelEdit() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .tbPopoverDidClose)) { _ in
             if edit.editing { commitEdit() }
         }
@@ -452,10 +460,11 @@ private struct TimerPage: View {
 
     private func commitEdit() {
         guard edit.editing else { return }
-        if edit.minutes > 0, edit.minutes != timer.workIntervalLength || timer.state != .idle {
-            timer.setWorkLength(minutes: edit.minutes)
-        }
+        let minutes = edit.minutes
         withAnimation(.easeOut(duration: 0.15)) { edit.editing = false }
+        if minutes > 0, minutes != timer.workIntervalLength {
+            timer.setWorkLength(minutes: minutes)
+        }
     }
 
     private func cancelEdit() {
@@ -472,6 +481,9 @@ private struct TimerPage: View {
                     Text(displayTime)
                         .font(.system(size: 44, weight: .light))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .padding(.horizontal, 14)
                         .countdownTransition()
                         .animation(.spring(response: 0.3, dampingFraction: 0.9), value: displayTime)
                         .opacity(timer.state == .paused ? 0.45 : 1)
@@ -592,6 +604,13 @@ private struct TimerPage: View {
 
 // MARK: - Statistics page
 
+private struct LocalizedDateFormatterKey: Hashable {
+    let localeId: String
+    let template: String
+}
+
+private var localizedDateFormatterCache: [LocalizedDateFormatterKey: DateFormatter] = [:]
+
 private struct StatsPage: View {
     @ObservedObject var ui: PopoverUIState
     @ObservedObject private var stats = TBStats.shared
@@ -600,30 +619,42 @@ private struct StatsPage: View {
     private var calendar: Calendar { Calendar.current }
 
     private var isCurrentMonth: Bool {
-        calendar.isDate(ui.statsMonth, equalTo: Date(), toGranularity: .month)
+        calendar.compare(ui.statsMonth, to: Date(), toGranularity: .month) != .orderedAscending
     }
 
     private func formatted(_ date: Date, _ template: String) -> String {
-        let f = DateFormatter()
-        f.locale = l10n.locale
-        f.setLocalizedDateFormatFromTemplate(template)
+        let locale = l10n.locale
+        let key = LocalizedDateFormatterKey(localeId: locale.identifier, template: template)
+        let f: DateFormatter
+        if let cached = localizedDateFormatterCache[key] {
+            f = cached
+        } else {
+            let created = DateFormatter()
+            created.locale = locale
+            created.timeZone = .autoupdatingCurrent
+            created.setLocalizedDateFormatFromTemplate(template)
+            localizedDateFormatterCache[key] = created
+            f = created
+        }
         return f.string(from: date)
     }
 
     private func shiftMonth(_ delta: Int) {
-        if let month = calendar.date(byAdding: .month, value: delta, to: ui.statsMonth) {
+        let base = calendar.dateInterval(of: .month, for: ui.statsMonth)?.start ?? ui.statsMonth
+        if let month = calendar.date(byAdding: .month, value: delta, to: base) {
             withAnimation(.easeOut(duration: 0.2)) { ui.statsMonth = month }
         }
     }
 
     var body: some View {
-        let days = stats.days(inMonthOf: ui.statsMonth).reversed()
-        let longest = max(days.map { stats.seconds(on: $0) }.max() ?? 0, 1)
+        let days = Array(stats.days(inMonthOf: ui.statsMonth).reversed())
+        let longest = max(days.map { Double(displayedMinutes(for: stats.seconds(on: $0))) }.max() ?? 0, 1)
+        let hasRecordedDay = days.contains { displayedMinutes(for: stats.seconds(on: $0)) > 0 }
         VStack(alignment: .leading, spacing: 16) {
             summary
             monthSwitcher
             SettingsSection(title: l10n.t("stats.daily")) {
-                if stats.total(inMonthOf: ui.statsMonth) == 0 {
+                if !hasRecordedDay {
                     Text(l10n.t("stats.none"))
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -686,6 +717,7 @@ private struct StatsPage: View {
 
     private func dayRow(_ day: Date, longest: Double, divider: Bool) -> some View {
         let seconds = stats.seconds(on: day)
+        let minutes = displayedMinutes(for: seconds)
         let isToday = calendar.isDateInToday(day)
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -696,14 +728,14 @@ private struct StatsPage: View {
                     .frame(width: 86, alignment: .leading)
                 GeometryReader { geo in
                     Capsule()
-                        .fill(pauseOrange.opacity(seconds > 0 ? 0.85 : 0))
-                        .frame(width: max(geo.size.width * seconds / longest, seconds > 0 ? 4 : 0), height: 6)
+                        .fill(pauseOrange.opacity(minutes > 0 ? 0.85 : 0))
+                        .frame(width: minutes > 0 ? max(geo.size.width * Double(minutes) / longest, 4) : 0, height: 6)
                         .frame(maxHeight: .infinity, alignment: .center)
                 }
                 .frame(height: 14)
-                Text(seconds >= 60 ? formatDuration(seconds, compact: true) : "—")
+                Text(minutes > 0 ? formatDuration(seconds, compact: true) : "—")
                     .monospacedDigit()
-                    .foregroundColor(seconds >= 60 ? .primary : .secondary)
+                    .foregroundColor(minutes > 0 ? .primary : .secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(width: 92, alignment: .trailing)
@@ -752,6 +784,7 @@ struct TBPopoverView: View {
         }
         .frame(width: 290)
         .clipped()
+        .environment(\.locale, l10n.locale)
         .onReceive(NotificationCenter.default.publisher(for: .tbPopoverWillShow)) { _ in
             // Always open on the timer, with this month's figures
             ui.page = .timer

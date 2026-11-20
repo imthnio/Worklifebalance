@@ -85,8 +85,15 @@ private let keyNames: [Int: String] = [
     kVK_ANSI_Comma: ",", kVK_ANSI_Period: ".", kVK_ANSI_Slash: "/",
     kVK_ANSI_Backslash: "\\", kVK_ANSI_Grave: "`",
     kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥",
+    kVK_Delete: "⌫", kVK_ForwardDelete: "⌦",
     kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
     kVK_Home: "↖", kVK_End: "↘", kVK_PageUp: "⇞", kVK_PageDown: "⇟",
+    kVK_ANSI_Keypad0: "0", kVK_ANSI_Keypad1: "1", kVK_ANSI_Keypad2: "2",
+    kVK_ANSI_Keypad3: "3", kVK_ANSI_Keypad4: "4", kVK_ANSI_Keypad5: "5",
+    kVK_ANSI_Keypad6: "6", kVK_ANSI_Keypad7: "7", kVK_ANSI_Keypad8: "8",
+    kVK_ANSI_Keypad9: "9", kVK_ANSI_KeypadDecimal: ".", kVK_ANSI_KeypadMultiply: "*",
+    kVK_ANSI_KeypadPlus: "+", kVK_ANSI_KeypadDivide: "/", kVK_ANSI_KeypadMinus: "-",
+    kVK_ANSI_KeypadEquals: "=", kVK_ANSI_KeypadEnter: "⌤",
     kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5",
     kVK_F6: "F6", kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10",
     kVK_F11: "F11", kVK_F12: "F12", kVK_F13: "F13", kVK_F14: "F14",
@@ -116,8 +123,8 @@ private func decodeSavedHotKeys(_ data: Data) -> [HotKeyAction: HotKey]? {
         guard let name = items[index] as? String,
               let action = HotKeyAction(rawValue: name),
               let value = items[index + 1] as? [String: Any],
-              let keyCode = value["keyCode"] as? UInt32,
-              let modifiers = value["modifiers"] as? UInt32 else { continue }
+              let keyCode = (value["keyCode"] as? UInt32) ?? (value["keyCode"] as? NSNumber)?.uint32Value,
+              let modifiers = (value["modifiers"] as? UInt32) ?? (value["modifiers"] as? NSNumber)?.uint32Value else { continue }
         keys[action] = HotKey(keyCode: keyCode, modifiers: modifiers)
     }
     return keys
@@ -127,9 +134,12 @@ class HotKeyCenter: ObservableObject {
     static let shared = HotKeyCenter()
 
     @Published private(set) var hotKeys: [HotKeyAction: HotKey] = [:]
+    @Published private(set) var recordingAction: HotKeyAction?
     private var handlers: [HotKeyAction: () -> Void] = [:]
     private var refs: [HotKeyAction: EventHotKeyRef] = [:]
-    private(set) var suspended = false
+    private var recordingMonitor: Any?
+
+    var suspended: Bool { recordingAction != nil }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -165,7 +175,7 @@ class HotKeyCenter: ObservableObject {
                 return OSStatus(eventNotHandledErr)
             }
             let index = Int(hkID.id)
-            guard index < HotKeyAction.allCases.count else {
+            guard index >= 0, index < HotKeyAction.allCases.count else {
                 return OSStatus(eventNotHandledErr)
             }
             let action = HotKeyAction.allCases[index]
@@ -181,6 +191,18 @@ class HotKeyCenter: ObservableObject {
         registerAll()
     }
 
+    /// Handles shortcuts inside the app's own windows when not registered globally (e.g. ⌘Q)
+    func handleLocalKeyDown(_ event: NSEvent) -> Bool {
+        guard !suspended, let pressed = HotKey(event: event) else { return false }
+        for action in HotKeyAction.allCases where hotKeys[action] == pressed {
+            if refs[action] == nil, let handler = handlers[action] {
+                handler()
+                return true
+            }
+        }
+        return false
+    }
+
     func set(_ hotKey: HotKey?, for action: HotKeyAction) {
         hotKeys[action] = hotKey
         // A combination can only trigger one action
@@ -194,6 +216,7 @@ class HotKeyCenter: ObservableObject {
     }
 
     func restoreDefaults() {
+        stopRecording()
         var keys: [HotKeyAction: HotKey] = [:]
         for action in HotKeyAction.allCases {
             keys[action] = action.defaultHotKey
@@ -203,15 +226,41 @@ class HotKeyCenter: ObservableObject {
         registerAll()
     }
 
-    /// Temporarily disable global hotkeys so they can be recorded
-    func suspend() {
-        suspended = true
+    /// Records a shortcut for a single action at a time, temporarily disabling global hotkeys
+    func startRecording(_ action: HotKeyAction) {
+        stopRecording()
+        recordingAction = action
         unregisterAll()
+        recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, let current = self.recordingAction else { return event }
+            let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            switch Int(event.keyCode) {
+            case kVK_Escape where mods.isEmpty:
+                self.stopRecording()
+            case kVK_Delete where mods.isEmpty, kVK_ForwardDelete where mods.isEmpty:
+                self.set(nil, for: current)
+                self.stopRecording()
+            default:
+                if let hotKey = HotKey(event: event) {
+                    self.set(hotKey, for: current)
+                    self.stopRecording()
+                } else {
+                    NSSound.beep()
+                }
+            }
+            return nil
+        }
     }
 
-    func resume() {
-        suspended = false
-        registerAll()
+    func stopRecording() {
+        if let monitor = recordingMonitor {
+            NSEvent.removeMonitor(monitor)
+            recordingMonitor = nil
+        }
+        if recordingAction != nil {
+            recordingAction = nil
+            registerAll()
+        }
     }
 
     private func save() {
@@ -250,28 +299,24 @@ class HotKeyCenter: ObservableObject {
     }
 }
 
-private class RecorderState: ObservableObject {
-    @Published var recording = false
-    var monitor: Any?
-}
-
 struct HotKeyRecorder: View {
     let action: HotKeyAction
     @ObservedObject private var center = HotKeyCenter.shared
     @ObservedObject private var l10n = L10n.shared
-    @StateObject private var state = RecorderState()
+
+    private var isRecording: Bool { center.recordingAction == action }
 
     var body: some View {
         HStack(spacing: 4) {
             Button {
-                state.recording ? stopRecording() : startRecording()
+                isRecording ? center.stopRecording() : center.startRecording(action)
             } label: {
                 Text(label)
                     .font(.system(.body).monospacedDigit())
-                    .foregroundColor(state.recording ? .accentColor : .primary)
+                    .foregroundColor(isRecording ? .accentColor : .primary)
                     .frame(width: 92)
             }
-            if center.hotKeys[action] != nil, !state.recording {
+            if center.hotKeys[action] != nil, !isRecording {
                 Button {
                     center.set(nil, for: action)
                 } label: {
@@ -280,47 +325,16 @@ struct HotKeyRecorder: View {
                 .buttonStyle(.plain)
             }
         }
-        .onDisappear { stopRecording() }
+        .onDisappear {
+            if isRecording { center.stopRecording() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .tbPopoverDidClose)) { _ in
-            stopRecording()
+            if isRecording { center.stopRecording() }
         }
     }
 
     private var label: String {
-        if state.recording { return l10n.t("shortcut.recording") }
+        if isRecording { return l10n.t("shortcut.recording") }
         return center.hotKeys[action]?.displayString ?? l10n.t("shortcut.none")
-    }
-
-    private func startRecording() {
-        state.recording = true
-        center.suspend()
-        state.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            switch Int(event.keyCode) {
-            case kVK_Escape:
-                stopRecording()
-            case kVK_Delete, kVK_ForwardDelete:
-                center.set(nil, for: action)
-                stopRecording()
-            default:
-                if let hotKey = HotKey(event: event) {
-                    center.set(hotKey, for: action)
-                    stopRecording()
-                } else {
-                    NSSound.beep()
-                }
-            }
-            return nil
-        }
-    }
-
-    private func stopRecording() {
-        if let monitor = state.monitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        state.monitor = nil
-        if state.recording {
-            state.recording = false
-            center.resume()
-        }
     }
 }

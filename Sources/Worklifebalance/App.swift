@@ -1,6 +1,15 @@
 import SwiftUI
 
 private let digitFont = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular)
+private let titleAttributes: [NSAttributedString.Key: Any] = {
+    let paragraphStyle = NSMutableParagraphStyle()
+    paragraphStyle.lineHeightMultiple = 0.9
+    paragraphStyle.alignment = .center
+    return [
+        .font: digitFont,
+        .paragraphStyle: paragraphStyle,
+    ]
+}()
 
 @main
 struct TBApp: App {
@@ -25,9 +34,11 @@ class TBStatusItem: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusBarItem: NSStatusItem?
     private var timer: TBTimer!
     private var termSignal: DispatchSourceSignal?
+    private var localKeyMonitor: Any?
     static var shared: TBStatusItem!
 
     func applicationDidFinishLaunching(_: Notification) {
+        TBStatusItem.shared = self
         // The installer quits the running copy with SIGTERM; exit normally so focus time is saved
         signal(SIGTERM, SIG_IGN)
         termSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
@@ -51,29 +62,17 @@ class TBStatusItem: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.contentViewController = controller
 
         // In-app shortcuts (e.g. ⌘Q) for the panel and the reminder banner
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let hotKeys = HotKeyCenter.shared
-            if !hotKeys.suspended, hotKeys.hotKeys[.quit]?.matches(event) == true {
-                NSApp.terminate(nil)
-                return nil
-            }
-            return event
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            HotKeyCenter.shared.handleLocalKeyDown(event) ? nil : event
         }
     }
 
     func setTitle(title: String?) {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineHeightMultiple = 0.9
-        paragraphStyle.alignment = NSTextAlignment.center
-
-        let attributedTitle = NSAttributedString(
-            string: title != nil ? " \(title!)" : "",
-            attributes: [
-                NSAttributedString.Key.font: digitFont,
-                NSAttributedString.Key.paragraphStyle: paragraphStyle
-            ]
+        let string = title.map { $0.isEmpty ? "" : " \($0)" } ?? ""
+        statusBarItem?.button?.attributedTitle = NSAttributedString(
+            string: string,
+            attributes: titleAttributes
         )
-        statusBarItem?.button?.attributedTitle = attributedTitle
     }
 
     func setIcon(working: Bool) {
@@ -107,6 +106,19 @@ class TBStatusItem: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.performClose(sender)
     }
 
+    /// Keeps the popover open while a modal panel (such as NSOpenPanel) is presented
+    func withPopoverPinned<T>(_ body: () -> T) -> T {
+        let previousBehavior = popover.behavior
+        popover.behavior = .applicationDefined
+        defer {
+            popover.behavior = previousBehavior
+            if popover.isShown {
+                popover.contentViewController?.view.window?.makeKey()
+            }
+        }
+        return body()
+    }
+
     enum ClickAction {
         case togglePanel, startStop, none
     }
@@ -125,9 +137,13 @@ class TBStatusItem: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             lastLeftClick = nil
             return .togglePanel
         }
-        if clickCount >= 2 {
+        if clickCount == 2 {
             lastLeftClick = nil
             return .startStop
+        }
+        if clickCount > 2 {
+            lastLeftClick = nil
+            return .none
         }
         if let last = lastLeftClick, now - last <= NSEvent.doubleClickInterval {
             lastLeftClick = nil

@@ -1,7 +1,8 @@
 #!/bin/bash
-# Launch the app for the logged-in user after installation
+# Launch the app in the logged-in user's GUI session after installation
 USER_NAME=$(stat -f "%Su" /dev/console)
-if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
-    sudo -u "$USER_NAME" open -a /Applications/Worklifebalance.app || true
+if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] && [ "$USER_NAME" != "loginwindow" ]; then
+    USER_UID=$(id -u "$USER_NAME")
+    launchctl asuser "$USER_UID" sudo -u "$USER_NAME" open -a /Applications/Worklifebalance.app || true
 fi
 exit 0

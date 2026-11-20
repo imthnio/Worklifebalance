@@ -12,17 +12,24 @@ class TBStats: ObservableObject {
     @Published private(set) var secondsByDay: [String: Double]
     private var lastMark: Date?
     private var lastSave = Date()
+    private var dirty = false
     private let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = .autoupdatingCurrent
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
 
     private init() {
         secondsByDay = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: Double] ?? [:]
-        // Make "today" roll over at midnight even while nothing is running
+        // Make "today" roll over at midnight or across timezone changes even while idle
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil,
+                                               queue: .main) { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil,
                                                queue: .main) { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -56,11 +63,14 @@ class TBStats: ObservableObject {
     func end() {
         mark()
         lastMark = nil
-        save()
+        if dirty {
+            save()
+        }
     }
 
     func save() {
         lastSave = Date()
+        dirty = false
         UserDefaults.standard.set(secondsByDay, forKey: storageKey)
     }
 
@@ -69,9 +79,11 @@ class TBStats: ObservableObject {
         let calendar = Calendar.current
         var cursor = start
         while cursor < end {
-            let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: cursor))!
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: cursor)),
+                  nextDay > cursor else { break }
             let segmentEnd = min(end, nextDay)
             secondsByDay[dayFormatter.string(from: cursor), default: 0] += segmentEnd.timeIntervalSince(cursor)
+            dirty = true
             cursor = segmentEnd
         }
     }
@@ -93,7 +105,9 @@ class TBStats: ObservableObject {
         var day = interval.start
         while day < interval.end, day <= todayStart {
             days.append(day)
-            day = calendar.date(byAdding: .day, value: 1, to: day)!
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day),
+                  next > day else { break }
+            day = next
         }
         return days
     }
@@ -103,15 +117,39 @@ class TBStats: ObservableObject {
     }
 }
 
+private struct DurationFormatterKey: Hashable {
+    let localeId: String
+    let compact: Bool
+    let showsHours: Bool
+}
+
+private var durationFormatterCache: [DurationFormatterKey: DateComponentsFormatter] = [:]
+
+/// Whole minutes displayed for a recorded duration (rounds up within 0.5s of a full minute)
+func displayedMinutes(for seconds: Double) -> Int {
+    guard seconds > 0 else { return 0 }
+    return Int((seconds + 0.5) / 60)
+}
+
 /// "1 h 23 min" style durations in the app's language; `compact` gives "1h 23m" for tight spaces
 func formatDuration(_ seconds: Double, compact: Bool = false) -> String {
-    let formatter = DateComponentsFormatter()
-    var calendar = Calendar.current
-    calendar.locale = L10n.shared.locale
-    formatter.calendar = calendar
-    formatter.unitsStyle = compact ? .abbreviated : .short
-    let minutes = Int(seconds / 60)
-    formatter.allowedUnits = minutes >= 60 ? [.hour, .minute] : [.minute]
-    formatter.zeroFormattingBehavior = minutes >= 60 ? .dropTrailing : .pad
+    let minutes = displayedMinutes(for: seconds)
+    let showsHours = minutes >= 60
+    let locale = L10n.shared.locale
+    let key = DurationFormatterKey(localeId: locale.identifier, compact: compact, showsHours: showsHours)
+    let formatter: DateComponentsFormatter
+    if let cached = durationFormatterCache[key] {
+        formatter = cached
+    } else {
+        let f = DateComponentsFormatter()
+        var calendar = Calendar.current
+        calendar.locale = locale
+        f.calendar = calendar
+        f.unitsStyle = compact ? .abbreviated : .short
+        f.allowedUnits = showsHours ? [.hour, .minute] : [.minute]
+        f.zeroFormattingBehavior = showsHours ? .dropTrailing : .pad
+        durationFormatterCache[key] = f
+        formatter = f
+    }
     return formatter.string(from: TimeInterval(minutes * 60)) ?? "\(minutes)"
 }

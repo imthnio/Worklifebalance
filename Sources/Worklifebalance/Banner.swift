@@ -11,7 +11,7 @@ private let hoverDuration: TimeInterval = 3
 private class BannerModel: ObservableObject {
     @Published var title = ""
     @Published var body = ""
-    var startNext: (() -> Void)?
+    @Published var startNext: (() -> Void)?
 }
 
 private class BannerPanel: NSPanel {
@@ -123,6 +123,7 @@ class TBBanner {
     private var hideWorkItem: DispatchWorkItem?
     /// Bumped on every show/hide so a finished hide animation can't close a newer banner
     private var generation = 0
+    private var isHiding = false
 
     func show(title: String, body: String, startNext: (() -> Void)?) {
         model.title = title
@@ -131,34 +132,37 @@ class TBBanner {
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame
         let target = NSRect(x: visible.maxX - bannerSize.width - screenMargin,
                             y: visible.maxY - bannerSize.height - screenMargin,
                             width: bannerSize.width, height: bannerSize.height)
 
         generation += 1
+        isHiding = false
         if !panel.isVisible {
             // Slide in from beyond the right edge of the screen
             panel.setFrame(target.offsetBy(dx: bannerSize.width + screenMargin * 2, dy: 0),
                            display: false)
+            panel.alphaValue = 1
             panel.orderFrontRegardless()
         }
-        panel.alphaValue = 1
         panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.45
             // Slight overshoot, like the system's spring-in banners
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.1, 0.35, 1)
             panel.animator().setFrame(target, display: true)
+            panel.animator().alphaValue = 1
         }
         hideWorkItem?.cancel()
     }
 
     func hide() {
         hideWorkItem?.cancel()
-        guard let panel = panel, panel.isVisible else { return }
+        guard let panel = panel, panel.isVisible, !isHiding else { return }
         generation += 1
+        isHiding = true
         let hiding = generation
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.25
@@ -167,7 +171,8 @@ class TBBanner {
                                       display: true)
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            guard self?.generation == hiding else { return }
+            guard let self = self, self.generation == hiding else { return }
+            self.isHiding = false
             panel.orderOut(nil)
         })
     }

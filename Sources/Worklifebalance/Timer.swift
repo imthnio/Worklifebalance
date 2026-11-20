@@ -12,7 +12,7 @@ class TBTimer: ObservableObject {
     @AppStorage("overrunTimeLimit") var overrunTimeLimit = -60.0
 
     public let player = TBPlayer()
-    private var finishTime: Date!
+    private var finishTime: Date?
     private var pausedTimeLeft: TimeInterval = 0
     private var totalTime: TimeInterval = 1
     private var timerFormatter = DateComponentsFormatter()
@@ -20,7 +20,11 @@ class TBTimer: ObservableObject {
     @Published var timeLeftString: String = ""
     /// Fraction of the current round still remaining, from 1 down to 0
     @Published private(set) var progress: Double = 1
-    @Published var timer: DispatchSourceTimer?
+    private var timer: DispatchSourceTimer?
+
+    private var clampedWorkSeconds: TimeInterval {
+        TimeInterval(min(max(workIntervalLength, 1), 120) * 60)
+    }
 
     init() {
         timerFormatter.unitsStyle = .positional
@@ -28,9 +32,9 @@ class TBTimer: ObservableObject {
         timerFormatter.zeroFormattingBehavior = .pad
 
         let hotKeys = HotKeyCenter.shared
-        hotKeys.onPress(.startStop) { [unowned self] in startStop() }
-        hotKeys.onPress(.pauseResume) { [unowned self] in pauseResume() }
-        hotKeys.onPress(.reset) { [unowned self] in reset() }
+        hotKeys.onPress(.startStop) { [weak self] in self?.startStop() }
+        hotKeys.onPress(.pauseResume) { [weak self] in self?.pauseResume() }
+        hotKeys.onPress(.reset) { [weak self] in self?.reset() }
         hotKeys.onPress(.togglePopover) { TBStatusItem.shared.togglePopover(nil) }
         hotKeys.onPress(.quit) { NSApp.terminate(nil) }
 
@@ -69,7 +73,7 @@ class TBTimer: ObservableObject {
         TBBanner.shared.hide()
         switch state {
         case .idle:
-            startWork(seconds: workIntervalLength * 60)
+            startWork(seconds: clampedWorkSeconds)
         case .work, .paused:
             stop()
         }
@@ -80,14 +84,19 @@ class TBTimer: ObservableObject {
         case .idle:
             return
         case .work:
-            pausedTimeLeft = max(finishTime.timeIntervalSince(Date()), 0)
+            pausedTimeLeft = max(finishTime?.timeIntervalSince(Date()) ?? 0, 0)
             TBStats.shared.end()
             cancelTimer()
+            finishTime = nil
             state = .paused
             TBStatusItem.shared.setIcon(working: false)
             updateTimeLeft()
         case .paused:
-            startWork(seconds: Int(pausedTimeLeft.rounded()))
+            if pausedTimeLeft <= 0 {
+                finish()
+            } else {
+                startWork(seconds: pausedTimeLeft)
+            }
         }
     }
 
@@ -98,7 +107,7 @@ class TBTimer: ObservableObject {
         TBStats.shared.end()
         cancelTimer()
         state = .idle
-        startWork(seconds: workIntervalLength * 60)
+        startWork(seconds: clampedWorkSeconds)
     }
 
     /// Sets a new focus length; a round in progress starts over with it (a paused one stays paused)
@@ -110,7 +119,7 @@ class TBTimer: ObservableObject {
         case .work:
             reset()
         case .paused:
-            pausedTimeLeft = TimeInterval(workIntervalLength * 60)
+            pausedTimeLeft = clampedWorkSeconds
             totalTime = pausedTimeLeft
             updateTimeLeft()
         }
@@ -124,11 +133,11 @@ class TBTimer: ObservableObject {
             return
         case .paused:
             timeLeftString = format(seconds: pausedTimeLeft)
-            progress = pausedTimeLeft / totalTime
+            progress = min(max(pausedTimeLeft / max(totalTime, 1), 0), 1)
         case .work:
-            let timeLeft = max(finishTime.timeIntervalSince(Date()), 0)
+            let timeLeft = max(finishTime?.timeIntervalSince(Date()) ?? 0, 0)
             timeLeftString = format(seconds: timeLeft)
-            progress = timeLeft / totalTime
+            progress = min(max(timeLeft / max(totalTime, 1), 0), 1)
         }
         TBStatusItem.shared.setTitle(title: showTimerInMenuBar ? timeLeftString : nil)
     }
@@ -139,22 +148,25 @@ class TBTimer: ObservableObject {
     }
 
     func format(seconds: TimeInterval) -> String {
-        timerFormatter.string(from: seconds.rounded(.up))!
+        timerFormatter.string(from: max(seconds, 0).rounded(.up)) ?? "00:00"
     }
 
-    private func startWork(seconds: Int) {
+    private func startWork(seconds: TimeInterval) {
         if state != .paused {
-            totalTime = TimeInterval(seconds)
+            totalTime = max(seconds, 1)
         }
+        finishTime = Date().addingTimeInterval(seconds)
         state = .work
         TBStatusItem.shared.setIcon(working: true)
         TBStats.shared.begin()
+        updateTimeLeft()
         startTimer(seconds: seconds)
     }
 
     private func stop() {
         TBStats.shared.end()
         cancelTimer()
+        finishTime = nil
         state = .idle
         TBStatusItem.shared.setIcon(working: false)
         updateTimeLeft()
@@ -163,10 +175,11 @@ class TBTimer: ObservableObject {
     private func finish() {
         TBStats.shared.end()
         cancelTimer()
+        finishTime = nil
         player.playAlert()
         let l10n = L10n.shared
         if autoRestart {
-            startWork(seconds: workIntervalLength * 60)
+            startWork(seconds: clampedWorkSeconds)
         } else {
             state = .idle
             TBStatusItem.shared.setIcon(working: false)
@@ -182,14 +195,17 @@ class TBTimer: ObservableObject {
         )
     }
 
-    private func startTimer(seconds: Int) {
-        finishTime = Date().addingTimeInterval(TimeInterval(seconds))
-
-        let queue = DispatchQueue(label: "Timer")
-        timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        timer!.schedule(deadline: .now(), repeating: .seconds(1), leeway: .never)
-        timer!.setEventHandler(handler: onTimerTick)
-        timer!.resume()
+    private func startTimer(seconds: TimeInterval) {
+        cancelTimer()
+        let source = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        let remainder = seconds.truncatingRemainder(dividingBy: 1)
+        let firstDelay = (remainder > 0.05 ? remainder : min(seconds, 1.0)) + 0.01
+        source.schedule(deadline: .now() + firstDelay, repeating: .seconds(1), leeway: .milliseconds(10))
+        source.setEventHandler { [weak self] in
+            self?.onTimerTick()
+        }
+        timer = source
+        source.resume()
     }
 
     private func cancelTimer() {
@@ -198,23 +214,21 @@ class TBTimer: ObservableObject {
     }
 
     private func onTimerTick() {
-        /* Cannot publish updates from background thread */
-        DispatchQueue.main.async { [self] in
-            guard state == .work else { return }
-            TBStats.shared.mark()
-            updateTimeLeft()
-            let timeLeft = finishTime.timeIntervalSince(Date())
-            if timeLeft <= 0 {
-                /*
-                 Ticks can be missed during the machine sleep.
-                 Stop the timer if it goes beyond an overrun time limit.
-                 */
-                if timeLeft < overrunTimeLimit {
-                    stop()
-                } else {
-                    finish()
-                }
+        guard state == .work, let finishTime = finishTime else { return }
+        let timeLeft = finishTime.timeIntervalSince(Date())
+        if timeLeft <= 0 {
+            /*
+             Ticks can be missed during the machine sleep.
+             Stop the timer if it goes beyond an overrun time limit.
+             */
+            if timeLeft < overrunTimeLimit {
+                stop()
+            } else {
+                finish()
             }
+            return
         }
+        TBStats.shared.mark()
+        updateTimeLeft()
     }
 }
